@@ -1,0 +1,22 @@
+# --- Icarus Verilog Simulation ---
+# The compiled simulation executables
+*.out
+*.vvp
+abc_sim
+
+# --- Waveform Dumps ---
+# These get massive very quickly!
+*.vcd
+*.fst
+*.lx2
+
+# --- FPGA Synthesis & Bitstreams (Yosys/NextPNR) ---
+*.json
+*.asc
+*.bin
+*.bit
+
+# --- OS & Editor Files ---
+.vscode/
+.DS_Store
+*.swp
