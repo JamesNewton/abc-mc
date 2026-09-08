@@ -43,17 +43,17 @@ module abc_cpu#(
                 end
                 
                 STATE_OP: begin
-                    op_sel <= rx_byte[`OP_AWIDTH-1:0];        
-                    fsm_state <= STATE_SRC;
-                end
-                
-                STATE_SRC: begin
                     if (rx_byte == `ASCII_LF || rx_byte == `ASCII_CR) begin
                         fsm_state <= STATE_DST;
                     end else begin
-                        src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                        fsm_state <= STATE_OP;
+                        op_sel <= rx_byte[`OP_AWIDTH-1:0];        
+                        fsm_state <= STATE_SRC;
                     end
+                end
+                
+                STATE_SRC: begin
+                    src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+                    fsm_state <= STATE_OP;
                 end
                 default: fsm_state <= STATE_DST;
             endcase
