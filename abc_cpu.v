@@ -1,21 +1,33 @@
+
+`include "abc_define.vh"
+
 // --- 1. THE CPU MODULE ---
-module abc_cpu(
+module abc_cpu#(
+    // Define parameters HERE so the ports can use them!
+    parameter STATE_DST = 0,
+    parameter STATE_OP  = STATE_DST + 1,
+    parameter STATE_SRC = STATE_OP + 1,
+    parameter STATE_MAX = STATE_SRC + 1,
+    parameter STATE_WIDTH = $clog2(STATE_MAX)
+)(
     input clk,
     input reset,
-    input [7:0] rx_byte,
+    input [`RX_WIDTH-1:0] rx_byte,
     input rx_ready,
-    output reg [1:0] state,
-    output reg [7:0] debug,
-    output reg [4:0] dst_sel, 
-    output reg [7:0] op_sel,
-    output reg [4:0] src_sel
+    output reg [STATE_WIDTH-1:0] state, 
+    //heart of the cpu. Directs inst bytes to:
+    // 0. Destination select (dst_sel)
+    // 1. Operation select (op_sel)
+    // 2. Source select (src_sel)
+    // and then back to op_sel until the op is carriage return.
+    output reg [`REG_AWIDTH-1:0] dst_sel, //where there result will go
+    output reg [`OP_AWIDTH-1:0] op_sel,  //the operation to perform
+    output reg [`REG_AWIDTH-1:0] src_sel, //the data source
+
+    output reg [7:0] debug
 );
 
-    localparam STATE_DST = 2'd0;
-    localparam STATE_OP  = 2'd1;
-    localparam STATE_SRC = 2'd2; 
-
-    reg [1:0] fsm_state;
+    reg [STATE_WIDTH-1:0] fsm_state;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -26,20 +38,20 @@ module abc_cpu(
         end else if (rx_ready) begin
             case (fsm_state)
                 STATE_DST: begin
-                    dst_sel <= rx_byte[4:0] - 5'd1; 
+                    dst_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                     fsm_state <= STATE_OP;
                 end
                 
                 STATE_OP: begin
-                    op_sel <= rx_byte;        
+                    op_sel <= rx_byte[`OP_AWIDTH-1:0];        
                     fsm_state <= STATE_SRC;
                 end
                 
                 STATE_SRC: begin
-                    if (rx_byte == 8'd10 || rx_byte == 8'd13) begin
+                    if (rx_byte == `ASCII_LF || rx_byte == `ASCII_CR) begin
                         fsm_state <= STATE_DST;
                     end else begin
-                        src_sel <= rx_byte[4:0] - 5'd1; 
+                        src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                         fsm_state <= STATE_OP;
                     end
                 end
@@ -63,14 +75,14 @@ module testbench(); // No ports on standard testbenches!
     reg reset = 1;
     
     // Wires to hook up to the CPU outputs
-    wire [1:0] state;   
+    wire [`STATE_WIDTH-1:0] state;   
     wire [7:0] debug;
-    wire [4:0] dst_sel;
-    wire [7:0] op_sel;
-    wire [4:0] src_sel;
+    wire [`REG_AWIDTH-1:0] dst_sel;
+    wire [`OP_AWIDTH-1:0] op_sel;
+    wire [`REG_AWIDTH-1:0] src_sel;
 
     // Registers to feed the CPU inputs
-    reg [7:0] rx_byte = 0;
+    reg [`RX_WIDTH-1:0] rx_byte = 0;
     reg rx_ready = 0;
 
     reg [7:0] rom [0:255];
@@ -100,7 +112,7 @@ module testbench(); // No ports on standard testbenches!
         rom[0] = "a";
         rom[1] = "+";
         rom[2] = "5";
-        rom[3] = 8'd10; // Newline (\n)
+        rom[3] = `ASCII_LF; // Newline (\n)
         rom[4] = 8'd0;  // Null terminator
         
         // Hold reset for a moment, then let the CPU boot
