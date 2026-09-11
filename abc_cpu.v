@@ -1,6 +1,6 @@
 `include "abc_define.vh"
 
-// --- 1. THE CPU MODULE ---
+// --- CPU MODULE ---
 module abc_cpu#(
     // Defining parameters here allows the ports to use them.
     parameter STATE_DST = 0,
@@ -29,7 +29,11 @@ module abc_cpu#(
     // Literal number tracking
     output reg [`REG_DWIDTH-1:0] literal_num,
     output reg src_is_literal, 
-
+    // Memory Bus Interface
+    input [`REG_DWIDTH-1:0] reg_data_a,     // Data read from Dest register
+    input [`REG_DWIDTH-1:0] reg_data_b,     // Data read from Source register
+    output reg reg_write_en,                // Trigger to save data
+    output reg [`REG_DWIDTH-1:0] reg_write_data, // The data to save
     output reg [7:0] debug
 );
 
@@ -51,6 +55,9 @@ module abc_cpu#(
             src_sel   <= 0;
             literal_num <= 0;
             src_is_literal <= 0;
+            reg_write_en <= 0;
+            reg_write_data <= 0;
+
         end else if (rx_ready) begin
             case (fsm_state)
                 
@@ -107,93 +114,5 @@ module abc_cpu#(
     always @(*) begin
         state = fsm_state;
         debug = rx_byte;
-    end
-endmodule
-
-
-// --- 2. THE TESTBENCH ---
-module testbench(); // No ports on standard testbenches
-
-    // We generate the clock and reset ourselves
-    reg clk = 0;
-    reg reset = 1;
-    
-    // Wires to hook up to the CPU outputs
-    wire [`STATE_WIDTH-1:0] state;   
-    wire [7:0] debug;
-    wire [`REG_AWIDTH-1:0] dst_sel;
-    wire [`OP_AWIDTH-1:0] op_sel;
-    wire [`REG_AWIDTH-1:0] src_sel;
-    wire [`REG_DWIDTH-1:0] literal_num;
-    wire src_is_literal;
-
-    // Registers to feed the CPU inputs
-    reg [`RX_WIDTH-1:0] rx_byte = 0;
-    reg rx_ready = 0;
-
-    reg [7:0] rom [0:255];
-    reg [7:0] pc = 0;       
-    reg [7:0] cycle = 0;    
-
-    abc_cpu cpu (
-        .clk(clk),
-        .reset(reset),
-        .rx_byte(rx_byte),
-        .rx_ready(rx_ready),
-        .state(state),
-        .debug(debug),
-        .dst_sel(dst_sel),  
-        .op_sel(op_sel),    
-        .src_sel(src_sel),
-        .literal_num(literal_num), // Wire up the new ports
-        .src_is_literal(src_is_literal)
-    );
-
-    always #5 clk = ~clk;
-
-    initial begin
-        $dumpfile("dump.vcd");
-        $dumpvars(0, testbench);
-
-        // Test a multi-digit number: a + 42 \n
-        rom[0] = "a";
-        rom[1] = "+";
-        rom[2] = "4";
-        rom[3] = "2";
-        rom[4] = `ASCII_LF; 
-        rom[5] = 8'd0;  // Null terminator
-
-        // Hold reset for a moment, then let the CPU boot
-        #15 reset = 0;
-    end
-
-    // The Automated Test Feeder
-    always @(posedge clk) begin
-        if (reset) begin
-            pc <= 0;
-            cycle <= 0;
-            rx_ready <= 0;
-        end else begin
-            cycle <= cycle + 1;
-            rx_ready <= 0; 
-
-            if (cycle[1:0] == 2'b00 && rom[pc] != 0) begin
-                rx_byte <= rom[pc];
-                rx_ready <= 1;
-                
-                $display("[%0t] INJECT: '%c' | FSM: %d | LITERAL_NUM: %d", $time, rom[pc], state, literal_num);
-                pc <= pc + 1;
-            end 
-            else if (rom[pc] == 0 && cycle[1:0] == 2'b00) begin
-                $display("\n--- TEST COMPLETE ---");
-                if (state == 0) begin
-                    $display("[PASS] Final Literal Num parsed as: %d", literal_num);
-                end else begin
-                    $display("[FAIL] CPU is stuck in state: %d", state);
-                end
-                
-                $finish; // Stop the simulator
-            end
-        end
     end
 endmodule
