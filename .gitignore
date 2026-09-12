@@ -17,6 +17,10 @@ abc_sim
 *.bit
 
 # --- OS & Editor Files ---
-.vscode/
+!.vscode # Keep the .vscode directory itself
+.vscode/* # but NOT most of the files
+# But DO include the settings and tasks for the Verilog-HDL/SystemVerilog  v1.29.0 extension
+!.vscode/settings.json
+!.vscode/tasks.json
 .DS_Store
 *.swp

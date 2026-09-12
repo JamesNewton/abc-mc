@@ -1,0 +1,42 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "1. Compile Verilog",
+            "type": "shell",
+            "command": "iverilog",
+            "args": [
+                "-o",
+                "abc_sim", 
+                "top.v", 
+                "abc_cpu.v", 
+                "register_file.v",
+                "testbench.v"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "2. Run Simulation",
+            "type": "shell",
+            "command": "vvp",
+            "args": [
+                "abc_sim"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "dependsOn": "1. Compile Verilog",
+            "problemMatcher": []
+        },
+        {
+            "label": "3. View Waveforms (GTKWave)",
+            "type": "shell",
+            "command": "gtkwave",
+            "args": [
+                "dump.vcd"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

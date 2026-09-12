@@ -13,11 +13,6 @@ module testbench();
     reg [`RX_WIDTH-1:0] rx_byte = 0;
     reg rx_ready = 0;
 
-    reg [7:0] rom [0:255];
-    reg [7:0] pc = 0;       
-    reg [7:0] cycle = 0;    
-
-    // Instantiate the Motherboard, NOT the CPU!
     top system_top (
         .clk(clk),
         .reset(reset),
@@ -26,57 +21,96 @@ module testbench();
         .debug(debug)
     );
 
+    // Generate physical clock
     always #5 clk = ~clk;
 
+    // ==========================================
+    // TEST API (Helper Functions)
+    // ==========================================
+    
+    // Simulates sending a single character via UART
+    task send_byte(input [7:0] char);
+    begin
+        // Wait for the falling edge of the clock to change inputs
+        // (This prevents race conditions with the CPU's posedge clk)
+        @(negedge clk); 
+        rx_byte = char;
+        rx_ready = 1;
+        
+        @(negedge clk);
+        rx_ready = 0;
+        
+        // Give the CPU FSM 2 full clock cycles to process the byte
+        repeat(2) @(negedge clk); 
+    end
+    endtask
+
+    // Simulates typing a string of up to 16 characters
+    task send_string(input [127:0] str);
+        integer i;
+        reg [7:0] current_char;
+    begin
+        // Loop through the 16 possible characters, from MSB to LSB
+        for (i = 15; i >= 0; i = i - 1) begin
+            // Shift the string right to isolate the specific byte
+            current_char = (str >> (i * 8)) & 8'hFF;
+            
+            // Only send valid characters (skip the zero-padding)
+            if (current_char != 8'h00) begin
+                send_byte(current_char);
+            end
+        end
+    end
+    endtask
+
+    // Simulates sending a string (character by character)
+    // Note: Verilog-2001 doesn't handle strings elegantly, so we 
+    // sequence individual bytes to mimic typing "a+42\n".
+    task send_command(
+        input [7:0] c1, input [7:0] c2, input [7:0] c3, input [7:0] c4, input [7:0] c5
+    );
+    begin
+        if (c1) send_byte(c1);
+        if (c2) send_byte(c2);
+        if (c3) send_byte(c3);
+        if (c4) send_byte(c4);
+        if (c5) send_byte(c5);
+    end
+    endtask
+
+    // Our Assertion Framework
+    task assert_literal(input [`REG_DWIDTH-1:0] expected);
+    begin
+        // We peek into the motherboard to check the CPU state
+        if (system_top.cpu.literal_num !== expected) begin
+            $display("[FAIL] Expected %d, but got %d", expected, system_top.cpu.literal_num);
+            $finish;
+        end else begin
+            $display("[PASS] Literal accumulated correctly: %d", expected);
+        end
+    end
+    endtask
+
+    // ==========================================
+    // TEST EXECUTION SEQUENCE
+    // ==========================================
     initial begin
         $dumpfile("dump.vcd");
         $dumpvars(0, testbench);
 
-        // Test a multi-digit number: a + 42 \n
-        rom[0] = "a";
-        rom[1] = "+";
-        rom[2] = "4";
-        rom[3] = "2";
-        rom[4] = `ASCII_LF; 
-        rom[5] = 8'd0;  // Null terminator
-
-        // Hold reset for a moment, then let the CPU boot
         #15 reset = 0;
+        repeat(2) @(negedge clk);
+
+        $display("\n--- Running Test 1 ---");
+        send_string("a+42\n");
+        assert_literal(42);
+
+        $display("\n--- Running Test 2 ---");
+        send_string("b-7\n");
+        assert_literal(7);
+
+        $display("\n--- ALL TESTS COMPLETED SUCCESSFULLY ---");
+        $finish; 
     end
 
-    // The Automated Test Feeder
-    always @(posedge clk) begin
-        if (reset) begin
-            pc <= 0;
-            cycle <= 0;
-            rx_ready <= 0;
-        end else begin
-            cycle <= cycle + 1;
-            rx_ready <= 0; 
-
-            if (cycle[1:0] == 2'b00 && rom[pc] != 0) begin
-                rx_byte <= rom[pc];
-                rx_ready <= 1;
-                
-                // SPYING ON INTERNAL SIGNALS: 
-                // We use system_top.cpu... to peek inside the motherboard and CPU!
-                $display("[%0t] INJECT: '%c' | FSM: %d | LITERAL_NUM: %d", 
-                         $time, 
-                         rom[pc], 
-                         system_top.cpu.state, 
-                         system_top.cpu.literal_num);
-                pc <= pc + 1;
-            end 
-            else if (rom[pc] == 0 && cycle[1:0] == 2'b00) begin
-                $display("\n--- TEST COMPLETE ---");
-                if (system_top.cpu.state == 0) begin
-                    $display("[PASS] Final Literal Num parsed as: %d", system_top.cpu.literal_num);
-                end else begin
-                    $display("[FAIL] CPU is stuck in state: %d", system_top.cpu.state);
-                end
-                
-                $finish; // Stop the simulator
-            end
-        end
-    end
 endmodule
