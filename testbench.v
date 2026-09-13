@@ -1,4 +1,5 @@
 `include "abc_define.vh"
+`include "top.v"
 
 // --- THE TESTBENCH ---
 module testbench(); 
@@ -91,6 +92,28 @@ module testbench();
     end
     endtask
 
+    // Peeks directly into the Register File memory grid to check a value!
+    task assert_register(input [7:0] reg_char, input [`REG_DWIDTH-1:0] expected);
+        integer addr;
+        reg [`REG_DWIDTH-1:0] actual;
+    begin
+        // Calculate the same address the CPU uses
+        addr = reg_char[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+        
+        // Wait 1 extra clock cycle for the Writeback pulse to finish saving to silicon
+        @(posedge clk); 
+        
+        actual = system_top.regs.memory[addr];
+        
+        if (actual !== expected) begin
+            $display("[FAIL] Register '%c': Expected %d, but got %d", reg_char, expected, actual);
+            $finish;
+        end else begin
+            $display("[PASS] Register '%c' successfully stored: %d", reg_char, expected);
+        end
+    end
+    endtask
+
     // ==========================================
     // TEST EXECUTION SEQUENCE
     // ==========================================
@@ -101,13 +124,17 @@ module testbench();
         #15 reset = 0;
         repeat(2) @(negedge clk);
 
-        $display("\n--- Running Test 1 ---");
-        send_string("a+42\n");
-        assert_literal(42);
+        $display("\n--- Direct Assignment ---");
+        // Because : isn't a defined operator, the ALU defaults to passing the literal through!
+        send_string("a:42\n"); 
+        assert_register("a", 42);
 
-        $display("\n--- Running Test 2 ---");
-        send_string("b-7\n");
-        assert_literal(7);
+        $display("\n--- Addition from Memory ---");
+        // Let's do: dst=b, op=+, src=a 
+        send_string("b+a\n"); 
+        // b = a(42) + b(0) -> Wait, our ALU does: dst = dst OP src. 
+        // Since 'b' is 0, b = 0 + 42 = 42!
+        assert_register("b", 42);
 
         $display("\n--- ALL TESTS COMPLETED SUCCESSFULLY ---");
         $finish; 

@@ -1,3 +1,6 @@
+`ifndef REGISTER_FILE_V
+`define REGISTER_FILE_V
+
 `include "abc_define.vh"
 
 module register_file (
@@ -43,3 +46,4 @@ module register_file (
     end
 
 endmodule
+`endif // REGISTER_FILE_V

@@ -1,4 +1,8 @@
+`ifndef TOP_V
+`define TOP_V
 `include "abc_define.vh"
+`include "abc_cpu.v" 
+`include "register_file.v"
 
 module top(
     input clk,
@@ -54,3 +58,4 @@ module top(
     );
 
 endmodule
+`endif // TOP_V

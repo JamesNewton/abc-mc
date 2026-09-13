@@ -1,3 +1,6 @@
+`ifndef ABC_CPU_V
+`define ABC_CPU_V
+
 `include "abc_define.vh"
 
 // --- CPU MODULE ---
@@ -80,7 +83,11 @@ module abc_cpu#(
             reg_write_en <= 0;
             reg_write_data <= 0;
 
-        end else if (rx_ready) begin
+        end else 
+        if (rx_ready) begin
+            // DEFAULT ASSIGNMENT:
+            // This guarantees the save pulse is EXACTLY 1 clock cycle long
+            reg_write_en <= 0;
             case (fsm_state)
                 
                 STATE_DST: begin
@@ -92,6 +99,10 @@ module abc_cpu#(
                 
                 STATE_OP: begin
                     if (is_eol) begin
+                        // SAVE FROM OP: 
+                        // Pulse write enable and lock in the ALU result
+                        reg_write_en <= 1;
+                        reg_write_data <= alu_result;
                         fsm_state <= STATE_DST;
                     end else if (is_op) begin
                         op_sel <= rx_byte[`OP_AWIDTH-1:0];        
@@ -115,15 +126,17 @@ module abc_cpu#(
 
                 STATE_NUM: begin
                     if (is_num) begin
-                        // The Hardware *10: (num * 8) + (num * 2) + new_digit
-                        literal_num <= (literal_num << 3) + (literal_num << 1)
-                         + (rx_byte[`REG_DWIDTH-1:0] - 8'd48);
+                        literal_num <= (literal_num << 3) + (literal_num << 1) + (rx_byte[`REG_DWIDTH-1:0] - 8'd48);
                     end else if (is_op) begin
                         // An operator. Lock in the number and process the op
                         op_sel <= rx_byte[`OP_AWIDTH-1:0];
                         fsm_state <= STATE_SRC;
                     end else if (is_eol) begin
-                        // End of line. Lock in the number and go back to start
+                        // SAVE FROM NUM:
+                        // Pulse write enable and lock in the ALU result
+                        reg_write_en <= 1;
+                        reg_write_data <= alu_result;
+                        
                         fsm_state <= STATE_DST;
                     end
                 end
@@ -138,3 +151,4 @@ module abc_cpu#(
         debug = rx_byte;
     end
 endmodule
+`endif // ABC_CPU_V
