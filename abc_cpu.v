@@ -46,6 +46,28 @@ module abc_cpu#(
     wire is_eol = (rx_byte == `ASCII_LF || rx_byte == `ASCII_CR);
     wire is_op  = (!is_reg && !is_num && !is_eol); 
 
+    // --- THE ALU (Arithmetic Logic Unit) ---
+    
+    // The Multiplexer (MUX) for Operand B
+    // If the parser flagged a literal, use literal_num. Otherwise, use the source register's data.
+    wire [`REG_DWIDTH-1:0] alu_operand_b = src_is_literal ? literal_num : reg_data_b;
+    
+    // The Math Result
+    reg [`REG_DWIDTH-1:0] alu_result;
+    
+    always @(*) begin
+        case (op_sel)
+            "+": alu_result = reg_data_a + alu_operand_b;
+            "-": alu_result = reg_data_a - alu_operand_b;
+            "&": alu_result = reg_data_a & alu_operand_b;
+            "|": alu_result = reg_data_a | alu_operand_b;
+            "^": alu_result = reg_data_a ^ alu_operand_b; // XOR
+            
+            // If no valid operator is set (or for direct assignment), just pass Operand B through
+            default: alu_result = alu_operand_b; 
+        endcase
+    end
+
     // --- THE PARSER FSM ---
     always @(posedge clk) begin
         if (reset) begin
