@@ -117,7 +117,7 @@ module testbench();
     // ==========================================
     // TEST EXECUTION SEQUENCE
     // ==========================================
-    initial begin
+initial begin
         $dumpfile("dump.vcd");
         $dumpvars(0, testbench);
 
@@ -126,15 +126,19 @@ module testbench();
 
         $display("\n--- Direct Assignment ---");
         // Because : isn't a defined operator, the ALU defaults to passing the literal through!
-        send_string("a:42\n"); 
-        assert_register("a", 42);
+        send_string("b:5\n");
+        send_string("c:10\n");
+        assert_register("b", 5);
+        assert_register("c", 10);
 
-        $display("\n--- Addition from Memory ---");
-        // Let's do: dst=b, op=+, src=a 
-        send_string("b+a\n"); 
-        // b = a(42) + b(0) -> Wait, our ALU does: dst = dst OP src. 
-        // Since 'b' is 0, b = 0 + 42 = 42!
-        assert_register("b", 42);
+        $display("\n--- Addition and chaining ---");
+        // This will execute:
+        // 1. a:b (a becomes 5)
+        // 2. a+c (a becomes 5 + 10)
+        // 3. \n  (Executes the addition, saving 15 to a)
+        send_string("a:b+c\n"); 
+        
+        assert_register("a", 15);
 
         $display("\n--- ALL TESTS COMPLETED SUCCESSFULLY ---");
         $finish; 

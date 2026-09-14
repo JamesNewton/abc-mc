@@ -9,15 +9,16 @@ module abc_cpu#(
     parameter STATE_DST = 0,
     parameter STATE_OP  = STATE_DST + 1,
     parameter STATE_SRC = STATE_OP + 1,
-    parameter STATE_NUM = STATE_SRC + 1, // NEW STATE!
-    parameter STATE_MAX = STATE_NUM + 1,
+    parameter STATE_NUM = STATE_SRC + 1,
+    parameter STATE_WAIT = STATE_NUM + 1,
+    parameter STATE_EXEC = STATE_WAIT + 1,
+    parameter STATE_MAX = STATE_EXEC + 1,
     parameter STATE_WIDTH = $clog2(STATE_MAX)
 )(
     input clk,
     input reset,
     input [`RX_WIDTH-1:0] rx_byte,
     input rx_ready,
-    
     output reg [STATE_WIDTH-1:0] state, 
     //heart of the cpu. Directs inst bytes to:
     // 0. Destination select (dst_sel)
@@ -41,6 +42,7 @@ module abc_cpu#(
 );
 
     reg [STATE_WIDTH-1:0] fsm_state;
+    reg [7:0] next_char;
 
     // --- THE LEXER ---
     // Instantly evaluates the input byte type; 0 clock cycles
@@ -80,69 +82,84 @@ module abc_cpu#(
             src_sel   <= 0;
             literal_num <= 0;
             src_is_literal <= 0;
-            reg_write_en <= 0;
             reg_write_data <= 0;
-
-        end else 
-        if (rx_ready) begin
-            // DEFAULT ASSIGNMENT:
-            // This guarantees the save pulse is EXACTLY 1 clock cycle long
+            next_char <= 0;
             reg_write_en <= 0;
-            case (fsm_state)
-                
-                STATE_DST: begin
-                    if (is_reg) begin
-                        dst_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                        fsm_state <= STATE_OP;
-                    end
-                end
-                
-                STATE_OP: begin
-                    if (is_eol) begin
-                        // SAVE FROM OP: 
-                        // Pulse write enable and lock in the ALU result
-                        reg_write_en <= 1;
-                        reg_write_data <= alu_result;
-                        fsm_state <= STATE_DST;
-                    end else if (is_op) begin
-                        op_sel <= rx_byte[`OP_AWIDTH-1:0];        
-                        fsm_state <= STATE_SRC;
-                    end
-                end
-                
-                STATE_SRC: begin
-                    if (is_reg) begin
-                        src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                        src_is_literal <= 0;
-                        fsm_state <= STATE_OP;
-                    end else if (is_num) begin
-                        // Grab the first digit and switch to NUM mode
-                        literal_num <= rx_byte[`REG_DWIDTH-1:0] - 8'd48; 
-                        // "0" is 48 in ASCII
-                        src_is_literal <= 1;
-                        fsm_state <= STATE_NUM;
-                    end
-                end
+        end else begin
+            
+            // DEFAULT ASSIGNMENT (1-cycle pulse)
+            reg_write_en <= 0; 
 
-                STATE_NUM: begin
-                    if (is_num) begin
-                        literal_num <= (literal_num << 3) + (literal_num << 1) + (rx_byte[`REG_DWIDTH-1:0] - 8'd48);
-                    end else if (is_op) begin
-                        // An operator. Lock in the number and process the op
-                        op_sel <= rx_byte[`OP_AWIDTH-1:0];
-                        fsm_state <= STATE_SRC;
-                    end else if (is_eol) begin
-                        // SAVE FROM NUM:
-                        // Pulse write enable and lock in the ALU result
-                        reg_write_en <= 1;
-                        reg_write_data <= alu_result;
-                        
-                        fsm_state <= STATE_DST;
-                    end
+            // 1. THE STALL PIPELINE
+            if (fsm_state == STATE_EXEC) begin
+                // The memory write was triggered on the previous clock edge. 
+                // Now, load the latched character into the next pipeline stage!
+                if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                    fsm_state <= STATE_DST;
+                end else begin
+                    op_sel <= next_char[`OP_AWIDTH-1:0];
+                    fsm_state <= STATE_SRC;
                 end
-                
-                default: fsm_state <= STATE_DST;
-            endcase
+            end 
+            
+            // 2. THE STANDARD PIPELINE
+            else if (rx_ready) begin
+                case (fsm_state)
+                    STATE_DST: begin
+                        if (is_reg) begin
+                            dst_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+                            fsm_state <= STATE_OP;
+                        end
+                    end
+                    
+                    STATE_OP: begin
+                        if (is_eol) begin
+                            fsm_state <= STATE_DST;
+                        end else if (is_op) begin
+                            op_sel <= rx_byte[`OP_AWIDTH-1:0];        
+                            fsm_state <= STATE_SRC;
+                        end
+                    end
+                    
+                    STATE_SRC: begin
+                        if (is_reg) begin
+                            src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+                            src_is_literal <= 0;
+                            fsm_state <= STATE_WAIT; // Instruction full Wait for the next OP.
+                        end else if (is_num) begin
+                            // Grab the first digit and switch to NUM mode
+                            literal_num <= rx_byte[`REG_DWIDTH-1:0] - 8'd48; 
+                            // "0" is 48 in ASCII
+                            src_is_literal <= 1;
+                            fsm_state <= STATE_NUM;
+                        end
+                    end
+
+                    STATE_NUM: begin
+                        if (is_num) begin
+                            literal_num <= (literal_num << 3) + (literal_num << 1) + (rx_byte[`REG_DWIDTH-1:0] - 8'd48);
+                        end else if (is_op || is_eol) begin
+                            // Execute the instruction
+                            next_char <= rx_byte;
+                            reg_write_en <= 1;
+                            reg_write_data <= alu_result;
+                            fsm_state <= STATE_EXEC;
+                        end
+                    end
+                    
+                    STATE_WAIT: begin
+                        if (is_op || is_eol) begin
+                            // Execute the instruction
+                            next_char <= rx_byte;
+                            reg_write_en <= 1;
+                            reg_write_data <= alu_result;
+                            fsm_state <= STATE_EXEC;
+                        end
+                    end
+                    
+                    default: fsm_state <= STATE_DST;
+                endcase
+            end
         end
     end
 
