@@ -12,9 +12,12 @@ The heart of the processor is a Finite State Machine (FSM) tracking the `dst_op_
 ## The Register File
 The CPU features an array of 26 wide registers, mapped directly to the alphabet (`a` through `z`). Several registers are hardwired to processor-level functions:
 * `p`: Program Counter (Instruction Fetch)
-* `s`: Stack Pointer
 * `q`: IO Queue / Ring Buffer
 * `r`: Radix (Base)
+* `s`: Stack Pointer
+* `t`: Terminal
+
+Note on Radix & Hexadecimal: Hex parsing can use a context-aware dual-classifier to resolve the a-f ambiguity. In STATE_DST, a-z are strictly registers. In STATE_SRC, if the radix register (r) is 16, a-f are intercepted as numeric literals and jump to STATE_NUM. Math accumulation dynamically shifts by 1, 3, or 4 based on r.
 
 ## Instruction Decoding & Accumulation
 Raw ASCII bytes from the instruction stream are decoded in hardware using combinational logic.

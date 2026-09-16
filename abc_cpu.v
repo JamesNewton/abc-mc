@@ -90,7 +90,7 @@ module abc_cpu#(
             // DEFAULT ASSIGNMENT (1-cycle pulse)
             reg_write_en <= 0; 
 
-            // 1. THE STALL PIPELINE
+            // THE STALL PIPELINE
             if (fsm_state == STATE_EXEC) begin
                 // The memory write was triggered on the previous clock edge. 
                 // Now, load the latched character into the next pipeline stage!
@@ -102,7 +102,7 @@ module abc_cpu#(
                 end
             end 
             
-            // 2. THE STANDARD PIPELINE
+            // THE STANDARD PIPELINE
             else if (rx_ready) begin
                 case (fsm_state)
                     STATE_DST: begin
