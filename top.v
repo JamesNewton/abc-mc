@@ -9,7 +9,9 @@ module top(
     input reset,
     input [`RX_WIDTH-1:0] rx_byte,
     input rx_ready,
-    output [7:0] debug
+    output [7:0] debug,
+    output tx_trigger,
+    output [7:0] tx_data
 );
 
     // --- Internal Motherboard Wires ---
@@ -19,7 +21,13 @@ module top(
     wire [`REG_DWIDTH-1:0] reg_data_b;
     wire reg_write_en;
     wire [`REG_DWIDTH-1:0] reg_write_data;
-    
+
+    // Memory-Mapped IO (MMIO) Router
+    wire is_terminal = (dst_addr == ("t" - `ASCII_OFFSET)); // writing reg 't'?
+    assign tx_trigger = reg_write_en & is_terminal; // pulse tx pin
+    assign tx_data    = reg_write_data;
+    wire ram_write_en = reg_write_en & ~is_terminal; // else RAM
+
     // (We will leave op_sel and literal_num internal to the CPU for now)
 
     // --- The CPU Chip ---
@@ -46,7 +54,7 @@ module top(
         .reset(reset),
         
         // Write Port (Driven by CPU)
-        .write_enable(reg_write_en),
+        .write_enable(ram_write_en),
         .write_addr(dst_addr),
         .write_data(reg_write_data),
         

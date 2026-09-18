@@ -10,6 +10,9 @@ module testbench();
     
     // We only need the wires that are actually exposed by top.v
     wire [7:0] debug;
+    // Registers to take CPU outputs
+    wire tx_trigger;
+    wire [7:0] tx_data;
     // Registers to feed the CPU inputs
     reg [`RX_WIDTH-1:0] rx_byte = 0;
     reg rx_ready = 0;
@@ -19,7 +22,9 @@ module testbench();
         .reset(reset),
         .rx_byte(rx_byte),
         .rx_ready(rx_ready),
-        .debug(debug)
+        .debug(debug),
+        .tx_trigger(tx_trigger),
+        .tx_data(tx_data)
     );
 
     // Generate physical clock
@@ -141,6 +146,19 @@ initial begin
         assert_register("a", 15);
 
         $display("\n--- ALL TESTS COMPLETED SUCCESSFULLY ---");
+
+        $display("\n--- Terminal Output ---");
+        send_string("a:65\n"); // Load 'a' with 65 ASCII for 'A'
+        assert_register("a", 65);
+        send_string("t:a\n"); // Send the value of 'a' to the terminal 't'
+        @(posedge clk); // 1 extra clock cycle; pipeline hits STATE_EXEC
+        if (tx_trigger === 1'b1 && tx_data === 8'd65) begin
+            $display("[PASS] Terminal received 65 ('A')");
+        end else begin
+            $display("[FAIL] Terminal did not receive data. Got trigger: %b, data: %d", tx_trigger, tx_data);
+            $finish;
+        end
+
         $finish; 
     end
 
