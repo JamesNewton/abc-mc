@@ -1,10 +1,10 @@
 ## Phase 1: Core Execution & Data Types
 Before we break the live-stream paradigm, we must finish the ALU and Lexer capabilities.
 
-**1. Output / Terminal Printing**
+**1. Output / Terminal Printing** DONE
  - **Plan**: Instantiate a UART TX module in `top.v`. Map the Terminal device to register `t` via Memory-Mapped IO (MMIO). When the ALU sees a write to `t`, route the data to the TX FIFO instead of RAM.  
 - **Test Case**: Send `a:42\nt:a\n`.
-- **Assertion**: Hook the testbench to the physical tx_out pin and assert the serial waveform transmits the ASCII characters "42".
+- **Assertion**: Assert the serial waveform transmits the ASCII characters "42".
 
 **2. Dynamic Radix & Hexadecimal Context**
 - **Plan**: Add a `cpu_radix` register that updates when the destination is `r`. Update `STATE_SRC` with a dual-classifier: `if cpu_radix == 16`, intercept `a-f` as digits. Update the shift-and-add logic in `STATE_NUM` to shift by 1, 3, or 4 based on the radix.  

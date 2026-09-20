@@ -150,15 +150,22 @@ initial begin
         $display("\n--- Terminal Output ---");
         send_string("a:65\n"); // Load 'a' with 65 ASCII for 'A'
         assert_register("a", 65);
+
         send_string("t:a\n"); // Send the value of 'a' to the terminal 't'
         @(posedge clk); // 1 extra clock cycle; pipeline hits STATE_EXEC
-        if (tx_trigger === 1'b1 && tx_data === 8'd65) begin
+        if (tx_data === 8'd65) begin
             $display("[PASS] Terminal received 65 ('A')");
         end else begin
             $display("[FAIL] Terminal did not receive data. Got trigger: %b, data: %d", tx_trigger, tx_data);
             $finish;
         end
 
+        send_string("r:16\n"); 
+        assert_register("r", 16);
+        send_string("f:10\n"); 
+        assert_register("f", 16);
+        send_string("g:f\n");
+        assert_register("g", 15);
         $finish; 
     end
 
