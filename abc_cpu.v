@@ -40,6 +40,7 @@ module abc_cpu#(
     output reg [`REG_DWIDTH-1:0] reg_write_data, // The data to save
     output reg [7:0] debug
 );
+    localparam [`REG_AWIDTH-1:0] REG_R_ADDR = "r" - `ASCII_OFFSET;
 
     reg [STATE_WIDTH-1:0] fsm_state;
     reg [7:0] next_char;
@@ -48,7 +49,7 @@ module abc_cpu#(
     // --- THE DYNAMIC LEXER ---
     wire is_hex_char = (rx_byte >= "a" && rx_byte <= "f");
     // Only treat a-f as numbers if we are actively expecting a Source or building a Number
-    wire parse_as_hex = (cpu_radix == 5'd16) && (fsm_state == STATE_SRC || fsm_state == STATE_NUM);
+    wire parse_as_hex = (cpu_radix == 16) && (fsm_state == STATE_SRC || fsm_state == STATE_NUM);
 
     // --- THE LEXER ---
     // Instantly evaluates the input byte type; 0 clock cycles
@@ -97,14 +98,13 @@ module abc_cpu#(
             reg_write_data <= 0;
             next_char <= 0;
             reg_write_en <= 0;
-            cpu_radix <= 8'd10;
+            cpu_radix <= 10;
         end else begin
             
             // DEFAULT ASSIGNMENT (1-cycle pulse)
             reg_write_en <= 0; 
-
-            // Sniff writes to register 'r' (address 17) to update the internal radix
-            if (reg_write_en && dst_sel == 5'd17) begin
+            // Sniff writes to register 'r' to update the internal radix
+            if (reg_write_en && dst_sel == 17) begin
                 cpu_radix <= reg_write_data[7:0];
             end
 
@@ -155,16 +155,14 @@ module abc_cpu#(
 
                     STATE_NUM: begin
                         if (is_num) begin
-                            if (cpu_radix == 8'd16) begin
+                            if (cpu_radix == 16) begin
                                 literal_num <= (literal_num << 4) + digit_val;
-                            // end if (cpu_radix == 8'd8) begin
-                            //     literal_num <= (literal_num << 3) + digit_val;
-                            // end if (cpu_radix == 8'd2) begin
-                            //     literal_num <= (literal_num << 1) + digit_val;
-                            // end if (cpu_radix == 8'd10) begin
-                            //     literal_num <= (literal_num << 3) + (literal_num << 1) + digit_val;
-                            end else begin
+                            end else if (cpu_radix == 10) begin
                                 literal_num <= (literal_num << 3) + (literal_num << 1) + digit_val;
+                            end else if (cpu_radix == 8) begin
+                                literal_num <= (literal_num << 3) + digit_val;
+                            end else if (cpu_radix == 2) begin
+                                literal_num <= (literal_num << 1) + digit_val;
                             end
                         end else if (is_op || is_eol) begin
                             // Execute the instruction
