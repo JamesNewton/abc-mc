@@ -2,6 +2,7 @@
 `define ABC_CPU_V
 
 `include "abc_define.vh"
+`include "alu_math.v"
 
 // --- CPU MODULE ---
 module abc_cpu#(
@@ -12,7 +13,8 @@ module abc_cpu#(
     parameter STATE_NUM = STATE_SRC + 1,
     parameter STATE_WAIT = STATE_NUM + 1,
     parameter STATE_EXEC = STATE_WAIT + 1,
-    parameter STATE_MAX = STATE_EXEC + 1,
+    parameter STATE_MATH = STATE_EXEC + 1,
+    parameter STATE_MAX = STATE_MATH + 1,
     parameter STATE_WIDTH = $clog2(STATE_MAX)
 )(
     input clk,
@@ -72,7 +74,25 @@ module abc_cpu#(
     
     // The Math Result
     reg [`REG_DWIDTH-1:0] alu_result;
-    
+
+    // --- THE MULTI-CYCLE MATH ENGINE ---
+    reg math_start;
+    wire math_done;
+    wire [`REG_DWIDTH-1:0] math_result;
+
+`ifdef MAKE_MUL_DIV
+    alu_math math_engine (
+        .clk(clk),
+        .reset(reset),
+        .start(math_start),
+        .op(op_sel),
+        .a(reg_data_a),
+        .b(alu_operand_b),
+        .result(math_result),
+        .done(math_done)
+    );
+`endif
+
     always @(*) begin
         case (op_sel)
             "+": alu_result = reg_data_a + alu_operand_b;
@@ -99,6 +119,7 @@ module abc_cpu#(
             next_char <= 0;
             reg_write_en <= 0;
             cpu_radix <= 10;
+            math_start <= 0;
         end else begin
             
             // DEFAULT ASSIGNMENT (1-cycle pulse)
@@ -167,9 +188,17 @@ module abc_cpu#(
                         end else if (is_op || is_eol) begin
                             // Execute the instruction
                             next_char <= rx_byte;
-                            reg_write_en <= 1;
-                            reg_write_data <= alu_result;
-                            fsm_state <= STATE_EXEC;
+`ifdef MAKE_MUL_DIV
+                            if (op_sel == "*") begin
+                                math_start <= 1;          
+                                fsm_state <= STATE_MATH;  
+                            end else
+`endif
+                            begin
+                                reg_write_en <= 1;
+                                reg_write_data <= alu_result;
+                                fsm_state <= STATE_EXEC;
+                            end
                         end
                     end
                     
@@ -177,12 +206,35 @@ module abc_cpu#(
                         if (is_op || is_eol) begin
                             // Execute the instruction
                             next_char <= rx_byte;
-                            reg_write_en <= 1;
-                            reg_write_data <= alu_result;
-                            fsm_state <= STATE_EXEC;
+`ifdef MAKE_MUL_DIV
+                            if (op_sel == "*") begin
+                                math_start <= 1;          // Wake up the ALU
+                                fsm_state <= STATE_MATH;  // Divert to the stall state
+                            end else
+`endif
+                            begin
+                                reg_write_en <= 1;
+                                reg_write_data <= alu_result;
+                                fsm_state <= STATE_EXEC;
+                            end
                         end
                     end
-                    
+
+                    STATE_MATH: begin
+                        math_start <= 0; // Drop the start pulse
+                        
+`ifdef MAKE_MUL_DIV
+                        if (math_done) begin
+                            // The 32 cycles are over. Write the math result to memory!
+                            reg_write_en <= 1;
+                            reg_write_data <= math_result;
+                            fsm_state <= STATE_EXEC;
+                        end
+`else
+                        fsm_state <= STATE_DST; // Failsafe if compiled incorrectly
+`endif
+                    end
+
                     default: fsm_state <= STATE_DST;
                 endcase
             end

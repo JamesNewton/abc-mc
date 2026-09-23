@@ -166,6 +166,14 @@ initial begin
         assert_register("f", 16);
         send_string("g:f\n");
         assert_register("g", 15);
+
+        $display("\n--- Multi-Cycle Multiplication ---");
+        send_string("a:7*6\n"); 
+        // Wait 40 clock cycles to guarantee the 32-cycle math engine finishes
+        repeat(40) @(posedge clk);
+        assert_register("a", 42);
+
+
         $finish; 
     end
 
