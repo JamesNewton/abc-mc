@@ -166,18 +166,27 @@ initial begin
         assert_register("f", 16);
         send_string("g:f\n");
         assert_register("g", 15);
+        // Reset to Base 10. Note that we are in hex, so 10 is a
+        send_string("r:a\n");
 
-`ifndef NO_MUL_DIV
+// `ifdef NO_MUL_DIV
         send_string("a:7*6\n"); 
-`ifdef MAKE_MUL_DIV
+`ifdef MAKE_MUL
         // Keep the simulation running long enough to finish the work. 
         repeat(`REG_DWIDTH + 8 ) @(posedge clk);
         $display("Multi-Cycle Multiplication test:");
 `endif
-`ifdef FAST_MUL_DIV
+`ifdef FAST_MUL
         $display("Fast Logic Multiplication (high cost):");
 `endif
         assert_register("a", 42);
+// `endif
+
+`ifdef MAKE_DIV
+        send_string("a:42/6\n");
+        repeat(`REG_DWIDTH + 8) @(posedge clk);
+        $display("Multi-Cycle Division test:");
+        assert_register("a", 7);
 `endif
 
         $finish; 

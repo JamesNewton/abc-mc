@@ -53,6 +53,17 @@ module abc_cpu#(
     // Only treat a-f as numbers if we are actively expecting a Source or building a Number
     wire parse_as_hex = (cpu_radix == 16) && (fsm_state == STATE_SRC || fsm_state == STATE_NUM);
 
+    // --- MATH ROUTING ---
+    // Dynamically checks if the current operator requires the multi-cycle engine
+    wire is_multi_cycle_op = 1'b0
+`ifdef MAKE_MUL
+        || (op_sel == "*")
+`endif
+`ifdef MAKE_DIV
+        || (op_sel == "/")
+`endif
+    ;
+
     // --- THE LEXER ---
     // Instantly evaluates the input byte type; 0 clock cycles
     wire is_num = (rx_byte >= "0" && rx_byte <= "9") || (parse_as_hex && is_hex_char);
@@ -80,7 +91,7 @@ module abc_cpu#(
     wire math_done;
     wire [`REG_DWIDTH-1:0] math_result;
 
-`ifdef MAKE_MUL_DIV
+`ifdef MULTI_CYCLE_MATH
     alu_math math_engine (
         .clk(clk),
         .reset(reset),
@@ -101,7 +112,7 @@ module abc_cpu#(
             "|": alu_result = reg_data_a | alu_operand_b;
             "^": alu_result = reg_data_a ^ alu_operand_b; // XOR
 
-`ifdef FAST_MUL_DIV
+`ifdef FAST_MUL
             // Synthesizes into dedicated DSP slices (or heavy LUT logic). Completes in 0 cycles!
             "*": alu_result = reg_data_a * alu_operand_b;
 `endif
@@ -149,7 +160,7 @@ module abc_cpu#(
             else if (fsm_state == STATE_MATH) begin
                 math_start <= 0; // Drop the start pulse
                 
-`ifdef MAKE_MUL_DIV
+`ifdef MULTI_CYCLE_MATH
                 if (math_done) begin
                     // The 32 cycles are over. Write the math result to memory!
                     reg_write_en <= 1;
@@ -208,8 +219,8 @@ module abc_cpu#(
                         end else if (is_op || is_eol) begin
                             // Execute the instruction
                             next_char <= rx_byte;
-`ifdef MAKE_MUL_DIV
-                            if (op_sel == "*") begin
+`ifdef MULTI_CYCLE_MATH
+                            if ( is_multi_cycle_op ) begin
                                 math_start <= 1;          
                                 fsm_state <= STATE_MATH;  
                             end else
@@ -226,8 +237,8 @@ module abc_cpu#(
                         if (is_op || is_eol) begin
                             // Execute the instruction
                             next_char <= rx_byte;
-`ifdef MAKE_MUL_DIV
-                            if (op_sel == "*") begin
+`ifdef MULTI_CYCLE_MATH
+                            if (is_multi_cycle_op) begin
                                 math_start <= 1;          // Wake up the ALU
                                 fsm_state <= STATE_MATH;  // Divert to the stall state
                             end else

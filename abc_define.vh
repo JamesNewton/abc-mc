@@ -3,10 +3,20 @@
 `define ABC_CONFIG_VH
 
 // --- ALU CONFIGURATION ---
-// Uncomment ONE of the following to set the math hardware capability:
-// `define NO_MUL_DIV      // No math support (saves area)
-// `define FAST_MUL_DIV    // Uses DSP blocks or heavy combinational logic
-`define MAKE_MUL_DIV       // Instantiates the 32-cycle shift-and-add state machine
+// Comment out a define to remove it from the silicon and save area.
+`define MAKE_MUL      // Instantiates multi-cycle shift-and-add multiplier
+// `define FAST_MUL   // Uses DSP blocks or heavy combinational logic for multiplication
+`define MAKE_DIV      // Instantiates a multi-cycle Restoring Division state machine
+
+// Internal macro to flag if the multi-cycle engine is needed at all
+`ifdef MAKE_MUL
+    `define MULTI_CYCLE_MATH
+`endif
+`ifdef MAKE_DIV
+    `ifndef MULTI_CYCLE_MATH
+        `define MULTI_CYCLE_MATH
+    `endif
+`endif
 
 `define RX_WIDTH 8
 `define REG_AWIDTH 5
