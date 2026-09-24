@@ -100,7 +100,11 @@ module abc_cpu#(
             "&": alu_result = reg_data_a & alu_operand_b;
             "|": alu_result = reg_data_a | alu_operand_b;
             "^": alu_result = reg_data_a ^ alu_operand_b; // XOR
-            
+
+`ifdef FAST_MUL_DIV
+            // Synthesizes into dedicated DSP slices (or heavy LUT logic). Completes in 0 cycles!
+            "*": alu_result = reg_data_a * alu_operand_b;
+`endif
             // If no valid operator is set (or for direct assignment), just pass Operand B through
             default: alu_result = alu_operand_b; 
         endcase
@@ -140,7 +144,23 @@ module abc_cpu#(
                     fsm_state <= STATE_SRC;
                 end
             end 
-            
+
+            // Independent Math Stall State
+            else if (fsm_state == STATE_MATH) begin
+                math_start <= 0; // Drop the start pulse
+                
+`ifdef MAKE_MUL_DIV
+                if (math_done) begin
+                    // The 32 cycles are over. Write the math result to memory!
+                    reg_write_en <= 1;
+                    reg_write_data <= math_result;
+                    fsm_state <= STATE_EXEC;
+                end
+`else
+                fsm_state <= STATE_DST; // Failsafe if compiled incorrectly
+`endif
+            end
+
             // THE STANDARD PIPELINE
             else if (rx_ready) begin
                 case (fsm_state)
@@ -218,21 +238,6 @@ module abc_cpu#(
                                 fsm_state <= STATE_EXEC;
                             end
                         end
-                    end
-
-                    STATE_MATH: begin
-                        math_start <= 0; // Drop the start pulse
-                        
-`ifdef MAKE_MUL_DIV
-                        if (math_done) begin
-                            // The 32 cycles are over. Write the math result to memory!
-                            reg_write_en <= 1;
-                            reg_write_data <= math_result;
-                            fsm_state <= STATE_EXEC;
-                        end
-`else
-                        fsm_state <= STATE_DST; // Failsafe if compiled incorrectly
-`endif
                     end
 
                     default: fsm_state <= STATE_DST;

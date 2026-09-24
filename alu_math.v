@@ -36,7 +36,7 @@ module alu_math(
                 m_reg <= a;
                 q_reg <= b;
                 acc <= 0;
-                cycle_count <= 32;
+                cycle_count <= `REG_DWIDTH;
                 busy <= 1;
                 
             end else if (busy) begin

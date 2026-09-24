@@ -167,12 +167,18 @@ initial begin
         send_string("g:f\n");
         assert_register("g", 15);
 
-        $display("\n--- Multi-Cycle Multiplication ---");
+`ifndef NO_MUL_DIV
         send_string("a:7*6\n"); 
-        // Wait 40 clock cycles to guarantee the 32-cycle math engine finishes
-        repeat(40) @(posedge clk);
+`ifdef MAKE_MUL_DIV
+        // Keep the simulation running long enough to finish the work. 
+        repeat(`REG_DWIDTH + 8 ) @(posedge clk);
+        $display("Multi-Cycle Multiplication test:");
+`endif
+`ifdef FAST_MUL_DIV
+        $display("Fast Logic Multiplication (high cost):");
+`endif
         assert_register("a", 42);
-
+`endif
 
         $finish; 
     end
