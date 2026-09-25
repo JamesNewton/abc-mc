@@ -3,19 +3,22 @@
 
 `include "abc_define.vh"
 `include "alu_math.v"
+`include "bram.v"
 
 // --- CPU MODULE ---
 module abc_cpu#(
     // Defining parameters here allows the ports to use them.
-    parameter STATE_DST = 0,
-    parameter STATE_OP  = STATE_DST + 1,
-    parameter STATE_SRC = STATE_OP + 1,
-    parameter STATE_NUM = STATE_SRC + 1,
-    parameter STATE_WAIT = STATE_NUM + 1,
-    parameter STATE_EXEC = STATE_WAIT + 1,
-    parameter STATE_MATH = STATE_EXEC + 1,
-    parameter STATE_MAX = STATE_MATH + 1,
-    parameter STATE_WIDTH = $clog2(STATE_MAX)
+    parameter STATE_FETCH      = 0,                    //instruction fetch
+    parameter STATE_FETCH_WAIT = STATE_FETCH + 1,
+    parameter STATE_DST        = STATE_FETCH_WAIT + 1, //set the destination
+    parameter STATE_OP         = STATE_DST + 1,        //set the operation
+    parameter STATE_SRC        = STATE_OP + 1,         //set the source
+    parameter STATE_NUM        = STATE_SRC + 1,        //accumulate a digit
+    parameter STATE_WAIT       = STATE_NUM + 1,        //
+    parameter STATE_EXEC       = STATE_WAIT + 1,       //execute dst, op, src
+    parameter STATE_MATH       = STATE_EXEC + 1,       //do multi-cycle math
+    parameter STATE_MAX        = STATE_MATH + 1,       //counts of states
+    parameter STATE_WIDTH      = $clog2(STATE_MAX)    //bits to hold state
 )(
     input clk,
     input reset,
@@ -49,9 +52,29 @@ module abc_cpu#(
     reg [`REG_AWIDTH-1:0] cpu_radix;
 
     // --- THE DYNAMIC LEXER ---
-    wire is_hex_char = (rx_byte >= "a" && rx_byte <= "f");
+    wire is_hex_char = (inst_byte >= "a" && inst_byte <= "f");
     // Only treat a-f as numbers if we are actively expecting a Source or building a Number
     wire parse_as_hex = (cpu_radix == 16) && (fsm_state == STATE_SRC || fsm_state == STATE_NUM);
+
+    // --- INSTRUCTION MEMORY (BRAM) ---
+    reg [`IMEM_AWIDTH-1:0] pc;
+    wire [`INST_WIDTH-1:0] inst_byte; // The ASCII character fetched from memory
+
+    bram #(
+        .DATA_WIDTH(8), // ASCII characters are 8 bits
+        .ADDR_WIDTH(`IMEM_AWIDTH)
+    ) imem (
+        .clk(clk),
+        
+        // Write Port (Disabled for now)
+        .write_en(1'b0),
+        .write_addr(8'd0),
+        .write_data(8'd0),
+        
+        // Read Port
+        .read_addr(pc),
+        .read_data(inst_byte)
+    );
 
     // --- MATH ROUTING ---
     // Dynamically checks if the current operator requires the multi-cycle engine
@@ -66,16 +89,16 @@ module abc_cpu#(
 
     // --- THE LEXER ---
     // Instantly evaluates the input byte type; 0 clock cycles
-    wire is_num = (rx_byte >= "0" && rx_byte <= "9") || (parse_as_hex && is_hex_char);
-    wire is_reg = (rx_byte >= "a" && rx_byte <= "z") && !is_num;
-    wire is_eol = (rx_byte == `ASCII_LF || rx_byte == `ASCII_CR);
+    wire is_num = (inst_byte >= "0" && inst_byte <= "9") || (parse_as_hex && is_hex_char);
+    wire is_reg = (inst_byte >= "a" && inst_byte <= "z") && !is_num;
+    wire is_eol = (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR);
     wire is_op  = (!is_reg && !is_num && !is_eol); 
 
     // Extract the numeric value (0-9 or 10-15)
     wire [`REG_DWIDTH-1:0] digit_val = 
-        (rx_byte >= "0" && rx_byte <= "9") ? 
-        (rx_byte - 8'd48) : 
-        (rx_byte - "a" + 8'd10);
+        (inst_byte >= "0" && inst_byte <= "9") ? 
+        (inst_byte - 8'd48) : 
+        (inst_byte - "a" + 8'd10);
 
     // --- THE ALU (Arithmetic Logic Unit) ---
     
@@ -124,7 +147,8 @@ module abc_cpu#(
     // --- THE PARSER FSM ---
     always @(posedge clk) begin
         if (reset) begin
-            fsm_state <= STATE_DST;
+            fsm_state <= STATE_FETCH; // Boot directly into fetch mode
+            pc <= 0;                  // Start at address 0
             dst_sel   <= 0;
             op_sel    <= 0;
             src_sel   <= 0;
@@ -149,7 +173,7 @@ module abc_cpu#(
                 // The memory write was triggered on the previous clock edge. 
                 // Now, load the latched character into the next pipeline stage!
                 if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
-                    fsm_state <= STATE_DST;
+                    fsm_state <= STATE_FETCH;
                 end else begin
                     op_sel <= next_char[`OP_AWIDTH-1:0];
                     fsm_state <= STATE_SRC;
@@ -172,28 +196,44 @@ module abc_cpu#(
 `endif
             end
 
+            // FETCH CYCLE
+            else if (fsm_state == STATE_FETCH) begin
+                // The PC is physically wired to the BRAM's read_addr.
+                // We just wait for the BRAM to clock the data out.
+                fsm_state <= STATE_FETCH_WAIT;
+            end
+            
+            else if (fsm_state == STATE_FETCH_WAIT) begin
+                // instruction_byte is now valid! 
+                // Increment the PC for the next fetch, and move to decode.
+                pc <= pc + 1;
+                fsm_state <= STATE_DST;
+            end
+
             // THE STANDARD PIPELINE
-            else if (rx_ready) begin
+            else begin
                 case (fsm_state)
                     STATE_DST: begin
                         if (is_reg) begin
-                            dst_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+                            dst_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                             fsm_state <= STATE_OP;
+                        end else begin
+                            fsm_state <= STATE_FETCH; // Ignore junk, fetch next byte                    end
                         end
                     end
-                    
+
                     STATE_OP: begin
                         if (is_eol) begin
                             fsm_state <= STATE_DST;
                         end else if (is_op) begin
-                            op_sel <= rx_byte[`OP_AWIDTH-1:0];        
+                            op_sel <= inst_byte[`OP_AWIDTH-1:0];        
                             fsm_state <= STATE_SRC;
                         end
                     end
                     
                     STATE_SRC: begin
                         if (is_reg) begin
-                            src_sel <= rx_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
+                            src_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                             src_is_literal <= 0;
                             fsm_state <= STATE_WAIT; // Instruction full Wait for the next OP.
                         end else if (is_num) begin
@@ -218,7 +258,7 @@ module abc_cpu#(
                             end
                         end else if (is_op || is_eol) begin
                             // Execute the instruction
-                            next_char <= rx_byte;
+                            next_char <= inst_byte;
 `ifdef MULTI_CYCLE_MATH
                             if ( is_multi_cycle_op ) begin
                                 math_start <= 1;          
@@ -236,7 +276,7 @@ module abc_cpu#(
                     STATE_WAIT: begin
                         if (is_op || is_eol) begin
                             // Execute the instruction
-                            next_char <= rx_byte;
+                            next_char <= inst_byte;
 `ifdef MULTI_CYCLE_MATH
                             if (is_multi_cycle_op) begin
                                 math_start <= 1;          // Wake up the ALU
@@ -259,7 +299,7 @@ module abc_cpu#(
 
     always @(*) begin
         state = fsm_state;
-        debug = rx_byte;
+        debug = inst_byte;
     end
 endmodule
 `endif // ABC_CPU_V
