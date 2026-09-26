@@ -48,7 +48,8 @@ module abc_cpu#(
     localparam [`REG_AWIDTH-1:0] REG_R_ADDR = "r" - `ASCII_OFFSET;
 
     reg [STATE_WIDTH-1:0] fsm_state;
-    reg [7:0] next_char;
+    reg [`INST_WIDTH-1:0] next_char;
+    reg [STATE_WIDTH-1:0] return_state;
     reg [`REG_AWIDTH-1:0] cpu_radix;
 
     // --- THE DYNAMIC LEXER ---
@@ -156,6 +157,7 @@ module abc_cpu#(
             src_is_literal <= 0;
             reg_write_data <= 0;
             next_char <= 0;
+            return_state <= STATE_DST;
             reg_write_en <= 0;
             cpu_radix <= 10;
             math_start <= 0;
@@ -170,13 +172,17 @@ module abc_cpu#(
 
             // THE STALL PIPELINE
             if (fsm_state == STATE_EXEC) begin
-                // The memory write was triggered on the previous clock edge. 
-                // Now, load the latched character into the next pipeline stage!
+                // The memory write is done. 
+                // Now evaluate the character that triggered us
                 if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                    // Consume EOL and start new instruction
                     fsm_state <= STATE_FETCH;
+                    return_state <= STATE_DST;
                 end else begin
+                    // Consume Operator and get source
                     op_sel <= next_char[`OP_AWIDTH-1:0];
-                    fsm_state <= STATE_SRC;
+                    return_state <= STATE_SRC;
+                    fsm_state <= STATE_FETCH;
                 end
             end 
 
@@ -202,12 +208,11 @@ module abc_cpu#(
                 // We just wait for the BRAM to clock the data out.
                 fsm_state <= STATE_FETCH_WAIT;
             end
-            
             else if (fsm_state == STATE_FETCH_WAIT) begin
                 // instruction_byte is now valid! 
                 // Increment the PC for the next fetch, and move to decode.
                 pc <= pc + 1;
-                fsm_state <= STATE_DST;
+                fsm_state <= return_state; // Dynamic return
             end
 
             // THE STANDARD PIPELINE
@@ -216,18 +221,25 @@ module abc_cpu#(
                     STATE_DST: begin
                         if (is_reg) begin
                             dst_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                            fsm_state <= STATE_OP;
+                            return_state <= STATE_OP;
+                            fsm_state <= STATE_FETCH; // Consume and fetch next
                         end else begin
-                            fsm_state <= STATE_FETCH; // Ignore junk, fetch next byte                    end
+                            fsm_state <= STATE_FETCH; // Ignore junk, fetch next
+                            return_state <= STATE_DST;
                         end
                     end
 
                     STATE_OP: begin
                         if (is_eol) begin
-                            fsm_state <= STATE_DST;
+                            return_state <= STATE_DST;
+                            fsm_state <= STATE_FETCH;
                         end else if (is_op) begin
                             op_sel <= inst_byte[`OP_AWIDTH-1:0];        
-                            fsm_state <= STATE_SRC;
+                            return_state <= STATE_SRC;
+                            fsm_state <= STATE_FETCH;
+                        end else begin
+                            return_state <= STATE_OP;
+                            fsm_state <= STATE_FETCH;
                         end
                     end
                     
@@ -235,30 +247,33 @@ module abc_cpu#(
                         if (is_reg) begin
                             src_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                             src_is_literal <= 0;
-                            fsm_state <= STATE_WAIT; // Instruction full Wait for the next OP.
+                            return_state <= STATE_WAIT; // Instruction full Wait for the next OP.
+                            fsm_state <= STATE_FETCH;
                         end else if (is_num) begin
                             // Grab the first digit and switch to NUM mode
                             literal_num <= digit_val; 
-                            // "0" is 48 in ASCII
                             src_is_literal <= 1;
-                            fsm_state <= STATE_NUM;
+                            return_state <= STATE_NUM;
+                            fsm_state <= STATE_FETCH;
+                        end else begin
+                            return_state <= STATE_SRC;
+                            fsm_state <= STATE_FETCH;
                         end
                     end
 
                     STATE_NUM: begin
                         if (is_num) begin
-                            if (cpu_radix == 16) begin
-                                literal_num <= (literal_num << 4) + digit_val;
-                            end else if (cpu_radix == 10) begin
-                                literal_num <= (literal_num << 3) + (literal_num << 1) + digit_val;
-                            end else if (cpu_radix == 8) begin
-                                literal_num <= (literal_num << 3) + digit_val;
-                            end else if (cpu_radix == 2) begin
-                                literal_num <= (literal_num << 1) + digit_val;
-                            end
+                            if (cpu_radix == 16) literal_num <= (literal_num << 4) + digit_val;
+                            else if (cpu_radix == 10) literal_num <= (literal_num << 3) + (literal_num << 1) + digit_val;
+                            else if (cpu_radix == 8) literal_num <= (literal_num << 3) + digit_val;
+                            else if (cpu_radix == 2) literal_num <= (literal_num << 1) + digit_val;
+                            
+                            return_state <= STATE_NUM;
+                            fsm_state <= STATE_FETCH; // Consume digit, fetch next
+                            
                         end else if (is_op || is_eol) begin
-                            // Execute the instruction
-                            next_char <= inst_byte;
+                            // Trigger execution.
+                            next_char <= inst_byte; // Latch the trigger character
 `ifdef MULTI_CYCLE_MATH
                             if ( is_multi_cycle_op ) begin
                                 math_start <= 1;          
@@ -270,17 +285,20 @@ module abc_cpu#(
                                 reg_write_data <= alu_result;
                                 fsm_state <= STATE_EXEC;
                             end
+                        end else begin
+                            return_state <= STATE_NUM;
+                            fsm_state <= STATE_FETCH;
                         end
                     end
                     
                     STATE_WAIT: begin
                         if (is_op || is_eol) begin
-                            // Execute the instruction
+                            // Trigger execution.
                             next_char <= inst_byte;
 `ifdef MULTI_CYCLE_MATH
                             if (is_multi_cycle_op) begin
-                                math_start <= 1;          // Wake up the ALU
-                                fsm_state <= STATE_MATH;  // Divert to the stall state
+                                math_start <= 1;          
+                                fsm_state <= STATE_MATH;  
                             end else
 `endif
                             begin
@@ -288,6 +306,9 @@ module abc_cpu#(
                                 reg_write_data <= alu_result;
                                 fsm_state <= STATE_EXEC;
                             end
+                        end else begin
+                            return_state <= STATE_WAIT;
+                            fsm_state <= STATE_FETCH;
                         end
                     end
 
