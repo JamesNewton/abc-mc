@@ -1,18 +1,11 @@
 {
     "version": "2.0.0",
     "tasks": [
-        {
+{
             "label": "1. Compile Verilog",
             "type": "shell",
-            "command": "iverilog",
-            "args": [
-                "-o",
-                "abc_sim", 
-                "top.v", 
-                "abc_cpu.v", 
-                "register_file.v",
-                "testbench.v"
-            ],
+            "command": "python3 assembler.py && iverilog -o abc_sim top.v abc_cpu.v register_file.v testbench.v",
+            "args": [],
             "problemMatcher": []
         },
         {

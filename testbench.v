@@ -77,8 +77,10 @@ initial begin
         $dumpvars(0, testbench);
 
         #15 reset = 0;
-        repeat(60) @(posedge clk);
+        repeat(200) @(posedge clk);
         assert_register("a", 42);
+        assert_register("b", 10);
+        assert_register("c", 1);
         $finish; 
     end
 

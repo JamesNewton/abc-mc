@@ -1,17 +1,17 @@
 ## Phase 1: Core Execution & Data Types
 Before we break the live-stream paradigm, we must finish the ALU and Lexer capabilities.
 
-**1. Output / Terminal Printing** DONE
+**Output / Terminal Printing** DONE
  - **Plan**: Instantiate a UART TX module in `top.v`. Map the Terminal device to register `t` via Memory-Mapped IO (MMIO). When the ALU sees a write to `t`, route the data to the TX FIFO instead of RAM.  
 - **Test Case**: Send `a:42\nt:a\n`.
 - **Assertion**: Assert the serial waveform transmits the ASCII characters "42".
 
-**2. Dynamic Radix & Hexadecimal Context**
+**Dynamic Radix & Hexadecimal Context** DONE
 - **Plan**: Add a `cpu_radix` register that updates when the destination is `r`. Update `STATE_SRC` with a dual-classifier: `if cpu_radix == 16`, intercept `a-f` as digits. Update the shift-and-add logic in `STATE_NUM` to shift by 1, 3, or 4 based on the radix.  
 - **Test Case**: Send `r:16\na:f\n`.
 - **Assertion**: `assert_register("a", 15)`.
 
-**3. Parameterized Multi-Cycle Math**
+**Parameterized Multi-Cycle Math** DONE
 - **Plan**: Add compiler directives (`ifdef FAST_MUL_DIV`) in `abc_define.vh`. Build `alu_math.v` as a 32-cycle shift-and-add multiplier/divider. Modify `STATE_EXEC` to stall until a `math_done` flag goes high.
 - **Test Case**: Send `a:7*6`
 - **Assertion**: Wait for 35 clock cycles, then `assert_register("a", 42)`.
@@ -19,8 +19,19 @@ Before we break the live-stream paradigm, we must finish the ALU and Lexer capab
 ## Phase 2: Memory & Control Flow
 Transitioning the CPU from a live UART listener to a stored-program architecture.
 
-**4. Program Memory & Program Counter (p)**
-- **Plan**: Instantiate a Block RAM (BRAM). Route incoming UART bytes to sequentially fill this BRAM. Re-wire the CPU's rx_byte input to fetch from the BRAM using the p register as the address. Add logic for [ (start loop) and ] (end loop) to modify p.  
+**Program Memory** DONE
+- **Plan**: Instantiate a Block RAM (BRAM).  DONE
+
+**Program Counter (p)** DONE
+- **Plan**: Decouple the execution FSM to handle memory pipeline latency. Route incoming UART bytes to sequentially fill this BRAM. Re-wire the CPU's rx_byte input to fetch from the BRAM using the p register as the address. 
+
+**Build a text-to-hex assembler script.**
+
+**Re-implement test cases into a program.txt software suite**
+
+**Implement Looping**
+Add logic for [ (start loop) and ] (end loop) to modify p.  
+
 - **Test Case**: Load BRAM with 
 ```
 a:0
