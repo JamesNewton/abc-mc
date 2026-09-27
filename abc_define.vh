@@ -18,6 +18,11 @@
     `endif
 `endif
 
+// --- MEMORY CONFIGURATION ---
+`define IMEM_AWIDTH 8  // Bit width needed to index bytes of instruction memory
+// so this sets the program memory size. 
+`define INST_WIDTH 8
+
 `define RX_WIDTH 8
 `define REG_AWIDTH 5
 `define REG_DWIDTH 8
