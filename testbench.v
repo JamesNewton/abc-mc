@@ -48,7 +48,7 @@ module testbench();
     endtask
 
     // Peeks directly into the Register File memory grid to check a value!
-    task assert_register(input [7:0] reg_char, input [`REG_DWIDTH-1:0] expected);
+    task assert_register(input [7:0] reg_char, input [`REG_DWIDTH-1:0] expected, input [1023:0] line_text);
         integer addr;
         reg [`REG_DWIDTH-1:0] actual;
     begin
@@ -61,7 +61,7 @@ module testbench();
         actual = system_top.regs.memory[addr];
         
         if (actual !== expected) begin
-            $display("[FAIL] Register '%c': Expected %d, but got %d", reg_char, expected, actual);
+            $display("[FAIL] Register '%c': Expected %d, but got %d in the line:\n %0s", reg_char, expected, actual, line_text);
             $finish;
         end else begin
             $display("[PASS] Register '%c' stored: %d", reg_char, expected);

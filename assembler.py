@@ -11,17 +11,19 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
 
     with open(input_file, 'r') as f:
         for line in f:
-            # Split the code from the comment
-            code_part = line.split(';')[0]
-            comment_part = line.split(';')[1] if ';' in line else ""
+            # Capture and sanitize the original line for Verilog printing
+            original_line = line.strip().replace('"', '\\"') 
+            code_part = line.split('#')[0]
+            comment_part = line.split('#')[1] if '#' in line else ""
             
-            # 1. Parse Assertions
-            comment_text = comment_part.strip()
-            if comment_text.startswith("now"):
-                tokens = comment_text.split()
-                if len(tokens) >= 4 and tokens[2]=="is":
-                    # Translates 'now a is 42' into Verilog syntax
-                    assert_lines.append(f'        assert_register("{tokens[1]}", {tokens[3]});')
+            # 1. Parse Assertions using a conversational syntax
+            tokens = comment_part.split()
+            if "now" in tokens and "is" in tokens:
+                reg = tokens[tokens.index("now") + 1]
+                val = tokens[tokens.index("is") + 1]
+                # Translates 'now a is 42' into Verilog syntax
+                # Pass the original string as the third parameter
+                assert_lines.append(f'        assert_register("{reg}", {val}, "{original_line}");')
 
             # 2. Parse Silicon Code
             code_text = code_part.rstrip()
@@ -32,7 +34,7 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
     
     # Check constraints and pad memory
     if len(hex_bytes) > memory_size:
-        print(f"Error: Program ({len(hex_bytes)} bytes) exceeds {memory_size}-byte memory!")
+        print(f"Error: Program ({len(hex_bytes)} bytes) exceeds memory!")
         return
         
     # Pad the rest of the memory with zeros to silence Verilog warnings
