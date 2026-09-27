@@ -25,9 +25,9 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 **Program Counter (p)** DONE
 - **Plan**: Decouple the execution FSM to handle memory pipeline latency. Route incoming UART bytes to sequentially fill this BRAM. Re-wire the CPU's rx_byte input to fetch from the BRAM using the p register as the address. 
 
-**Build a text-to-hex assembler script.**
+**Build a text-to-hex assembler script.** DONE
 
-**Re-implement test cases into a program.txt software suite**
+**Re-implement test cases into a program.txt software suite** DONE
 
 **Implement Looping**
 Add logic for [ (start loop) and ] (end loop) to modify p.  

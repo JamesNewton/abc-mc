@@ -3,8 +3,7 @@ import os
 
 def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
     if not os.path.exists(input_file):
-        print(f"Error: Could not find {input_file}")
-        return
+        raise SystemExit(f"Error: Could not find {input_file}")
 
     hex_bytes = []
     assert_lines = []
