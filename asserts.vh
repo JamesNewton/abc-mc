@@ -1,4 +1,4 @@
-        assert_register("f", 7, "f:6     #now f is 7");
+        assert_register("f", 7, "f:7     #now f is 7");
         assert_register("a", 42, "a:f*6   #now a is 42");
         assert_register("c", 8, "c:a/6+1 #now c is 8");
         assert_register("r", 10, "r:16    #now r is 10 hex because our radix is now 16.");

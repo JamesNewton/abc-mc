@@ -1,4 +1,4 @@
-f:6     #now f is 7
+f:7     #now f is 7
 a:f*6   #now a is 42
 c:a/6+1 #now c is 8
 r:16    #now r is 10 hex because our radix is now 16.
