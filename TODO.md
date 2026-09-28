@@ -29,6 +29,12 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 
 **Re-implement test cases into a program.txt software suite** DONE
 
+**The Return Address:** A place to store the pc value when we see a [, so we know exactly where to jump back to when we hit a ].
+
+**The Condition Flag:** A dedicated 1-bit flip-flop (e.g., cmp_flag) that gets set or cleared by the comparison operators (<, >, =)
+
+**The Jump Mechanic:** The ability to physically overwrite the Program Counter (pc) during execution, rather than just passively letting it increment.
+
 **Implement Looping**
 Add logic for [ (start loop) and ] (end loop) to modify p.  
 
