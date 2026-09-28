@@ -7,6 +7,7 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
 
     hex_bytes = []
     assert_lines = []
+    pc_counter = 0 # Tracks the current memory address
 
     with open(input_file, 'r') as f:
         for line in f:
@@ -15,23 +16,25 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
             code_part = line.split('#')[0]
             comment_part = line.split('#')[1] if '#' in line else ""
             
-            # 1. Parse Assertions using a conversational syntax
+            # 1. Parse Silicon Code & Advance PC
+            code_text = code_part.rstrip()
+            if code_text:
+                code_text += '\n'
+                pc_counter += len(code_text) # Advance the simulated PC
+                hex_bytes.extend([f"{ord(c):02X}" for c in code_text])
+
+            # 2. Parse Assertions
             tokens = comment_part.split()
             if "now" in tokens and "is" in tokens:
                 reg = tokens[tokens.index("now") + 1]
                 val = tokens[tokens.index("is") + 1]
-                # Translates 'now a is 42' into Verilog syntax
-                # Pass the original string as the third parameter
-                assert_lines.append(f'        assert_register("{reg}", {val}, "{original_line}");')
 
-            # 2. Parse Silicon Code
-            code_text = code_part.rstrip()
-            if code_text:
-                code_text += '\n' # Append the newline to trigger the CPU execution
-                # Convert each character to its 2-digit uppercase hex value
-                hex_bytes.extend([f"{ord(c):02X}" for c in code_text])
+                # Write the synchronization locks into the testbench
+                assert_lines.append(f'        // Sync to line: {original_line}')
+                assert_lines.append(f'        wait(system_top.cpu.pc == {pc_counter} && system_top.cpu.fsm_state == 0);')
+                assert_lines.append(f'        @(posedge clk); // Give memory 1 tick to save')
+                assert_lines.append(f'        assert_register("{reg}", {val}, "{original_line}");\n')
     
-    # Check constraints and pad memory
     if len(hex_bytes) > memory_size:
         print(f"Error: Program ({len(hex_bytes)} bytes) exceeds memory!")
         return
@@ -48,7 +51,7 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
     with open(assert_file, 'w') as f:
         f.write("\n".join(assert_lines) + "\n")
             
-    print(f"[SUCCESS] Assembled {len(hex_bytes)-hex_bytes.count('00')} bytes. Generated {len(assert_lines)} asserts.")
+    print(f"[SUCCESS] Assembled {len(hex_bytes)-hex_bytes.count('00')} bytes. Generated {len(assert_lines)} synchronized asserts.")
 
 if __name__ == "__main__":
     build_toolchain('program.txt', 'program.hex', 'asserts.vh')
