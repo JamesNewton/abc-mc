@@ -17,9 +17,10 @@ module abc_cpu#(
     parameter STATE_WAIT       = STATE_NUM + 1,        //
     parameter STATE_EXEC       = STATE_WAIT + 1,       //execute dst, op, src
     parameter STATE_MATH       = STATE_EXEC + 1,       //do multi-cycle math
-    parameter STATE_MAX        = STATE_MATH + 1,       //counts of states
-    parameter STATE_WIDTH      = $clog2(STATE_MAX)    //bits to hold state
-)(
+    parameter STATE_STACK_INC  = STATE_MATH + 1,       //increment stack
+    parameter STATE_MAX        = STATE_STACK_INC + 1,  //counts of states
+    parameter STATE_WIDTH      = $clog2(STATE_MAX)
+    )(
     input clk,
     input reset,
     input [`RX_WIDTH-1:0] rx_byte,
@@ -75,6 +76,27 @@ module abc_cpu#(
         // Read Port
         .read_addr(pc),
         .read_data(inst_byte)
+    );
+
+    // --- STACK MEMORY (BRAM) ---
+    wire [7:0] stack_read_data;
+    reg stack_write_en;
+    reg [7:0] stack_write_data;
+
+    bram #(
+        .DATA_WIDTH(`STACK_DWIDTH), 
+        .ADDR_WIDTH(`STACK_AWIDTH)
+    ) stack_mem (
+        .clk(clk),
+        .write_en(stack_write_en),
+        
+        // The Stack Pointer (s) is always the memory address!
+        .write_addr(system_top.regs.memory[`REG_S_STACK]), 
+        .read_addr(system_top.regs.memory[`REG_S_STACK]),
+        // route the s register data out of the Register File 
+        // to feed the Stack's address ports        
+        .write_data(stack_write_data),
+        .read_data(stack_read_data)
     );
 
     // --- MATH ROUTING ---
@@ -140,6 +162,7 @@ module abc_cpu#(
             // Synthesizes into dedicated DSP slices (or heavy LUT logic). Completes in 0 cycles!
             "*": alu_result = reg_data_a * alu_operand_b;
 `endif
+            ",": alu_result = reg_data_a + 1; // push NUM to Stack
             // If no valid operator is set (or for direct assignment), just pass Operand B through
             default: alu_result = alu_operand_b; 
         endcase
@@ -159,6 +182,8 @@ module abc_cpu#(
             next_char <= 0;
             return_state <= STATE_DST;
             reg_write_en <= 0;
+            stack_write_en <= 0;
+            stack_write_data <= 0;
             cpu_radix <= 10;
             math_start <= 0;
         end else begin
@@ -166,25 +191,38 @@ module abc_cpu#(
             // DEFAULT ASSIGNMENT (1-cycle pulse)
             reg_write_en <= 0; 
             // Sniff writes to register 'r' to update the internal radix
-            if (reg_write_en && dst_sel == 17) begin
+            if (reg_write_en && dst_sel == `REG_R_RADIX) begin
                 cpu_radix <= reg_write_data[7:0];
             end
 
             // THE STALL PIPELINE
             if (fsm_state == STATE_EXEC) begin
                 // The memory write is done. 
-                // Now evaluate the character that triggered us
-                if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
-                    // Consume EOL and start new instruction
-                    fsm_state <= STATE_FETCH;
-                    return_state <= STATE_DST;
+                // Check the CURRENT operation being executed
+                if (op_sel == ",") begin
+                    // Write the value to the Stack Memory
+                    stack_write_en <= 1;
+                    stack_write_data <= alu_operand_b; // Safely writes either a literal or a register
+
+                    // Setup the ALU to increment 's'
+                    dst_sel <= `REG_S_STACK;
+                    src_sel <= `REG_S_STACK;
+                    op_sel <= ","; // Trigger ALU to add 1
+                    
+                    fsm_state <= STATE_STACK_INC; // Divert!
                 end else begin
-                    // Consume Operator and get source
-                    op_sel <= next_char[`OP_AWIDTH-1:0];
-                    return_state <= STATE_SRC;
-                    fsm_state <= STATE_FETCH;
+                    // Normal execution routing
+                    // Now evaluate the character that triggered us
+                    if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                        fsm_state <= STATE_FETCH;
+                        return_state <= STATE_DST;
+                    end else begin
+                        op_sel <= next_char[`OP_AWIDTH-1:0];
+                        return_state <= STATE_SRC;
+                        fsm_state <= STATE_FETCH;
+                    end
                 end
-            end 
+            end
 
             // Independent Math Stall State
             else if (fsm_state == STATE_MATH) begin
@@ -200,6 +238,23 @@ module abc_cpu#(
 `else
                 fsm_state <= STATE_DST; // Failsafe if compiled incorrectly
 `endif
+            end
+
+            // Independent Stack Increment State
+            else if (fsm_state == STATE_STACK_INC) begin
+                stack_write_en <= 0;          // Drop the BRAM write pulse
+                reg_write_en <= 1;            // Fire the register write pulse
+                reg_write_data <= alu_result; // ALU has safely calculated s + 1
+                
+                // Now we must route the interrupted character just like STATE_EXEC
+                if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                    fsm_state <= STATE_FETCH;
+                    return_state <= STATE_DST;
+                end else begin
+                    op_sel <= next_char[`OP_AWIDTH-1:0];
+                    return_state <= STATE_SRC;
+                    fsm_state <= STATE_FETCH;
+                end
             end
 
             // FETCH CYCLE

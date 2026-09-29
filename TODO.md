@@ -3,17 +3,17 @@ Before we break the live-stream paradigm, we must finish the ALU and Lexer capab
 
 **Output / Terminal Printing** DONE
  - **Plan**: Instantiate a UART TX module in `top.v`. Map the Terminal device to register `t` via Memory-Mapped IO (MMIO). When the ALU sees a write to `t`, route the data to the TX FIFO instead of RAM.  
-- **Test Case**: Send `a:42\nt:a\n`.
+- **Test**: `a:42\nt:a\n`.
 - **Assertion**: Assert the serial waveform transmits the ASCII characters "42".
 
 **Dynamic Radix & Hexadecimal Context** DONE
 - **Plan**: Add a `cpu_radix` register that updates when the destination is `r`. Update `STATE_SRC` with a dual-classifier: `if cpu_radix == 16`, intercept `a-f` as digits. Update the shift-and-add logic in `STATE_NUM` to shift by 1, 3, or 4 based on the radix.  
-- **Test Case**: Send `r:16\na:f\n`.
+- **Test**: `r:16\na:f\n`.
 - **Assertion**: `assert_register("a", 15)`.
 
 **Parameterized Multi-Cycle Math** DONE
 - **Plan**: Add compiler directives (`ifdef FAST_MUL_DIV`) in `abc_define.vh`. Build `alu_math.v` as a 32-cycle shift-and-add multiplier/divider. Modify `STATE_EXEC` to stall until a `math_done` flag goes high.
-- **Test Case**: Send `a:7*6`
+- **Test**: `a:7*6`
 - **Assertion**: Wait for 35 clock cycles, then `assert_register("a", 42)`.
 
 ## Phase 2: Memory & Control Flow
@@ -29,7 +29,11 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 
 **Re-implement test cases into a program.txt software suite** DONE
 
-**The Return Address:** A place to store the pc value when we see a [, so we know exactly where to jump back to when we hit a ].
+**Stack** DONE
+- **Plan**: Build a LIFO buffer in silicon. Wire the push operator `,`
+- **Test**: `s:0\n z,42\n` s will be 1, z will be 0, and TOS 42
+
+**The Return Address:** Push the pc value to the stack when we see a [, so we know exactly where to jump back to when we hit a ].
 
 **The Condition Flag:** A dedicated 1-bit flip-flop (e.g., cmp_flag) that gets set or cleared by the comparison operators (<, >, =)
 
@@ -38,7 +42,7 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 **Implement Looping**
 Add logic for [ (start loop) and ] (end loop) to modify p.  
 
-- **Test Case**: Load BRAM with 
+- **Test**: Load BRAM with 
 ```
 a:0
 [
@@ -55,7 +59,7 @@ a<3~
 - **Assertion**: `assert_register("a", 42)`.
 
 **6. Hardware Call Stack (s)**
-- **Plan**: Build a 16-deep LIFO buffer in silicon. Wire the push operator `,`, parameter setup `(`, and call operator `)` to increment/decrement the `s` register and push/pop data to the LIFO.  
+- **Plan**: Wire the parameter setup `(`, and call operator `)` to increment/decrement the `s` register and push/pop data to the LIFO.  
 - **Test Case**: Send `(5,6)`
 - **Assertion**: Assert the internal hardware stack has a depth of 2, and the top element is 6.
 

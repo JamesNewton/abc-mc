@@ -69,6 +69,24 @@ module testbench();
     end
     endtask
 
+    // Peeks directly into the Stack Memory BRAM to check a value!
+    task assert_stack(input [7:0] addr, input [`REG_DWIDTH-1:0] expected, input [1023:0] line_text);
+        reg [`REG_DWIDTH-1:0] actual;
+    begin
+        // Wait 1 extra clock cycle for the Writeback pulse to finish
+        @(posedge clk); 
+        
+        actual = system_top.cpu.stack_mem.memory[addr];
+        
+        if (actual !== expected) begin
+            $display("[FAIL] Stack[%d]: Expected %d, but got %d in the line:\n  %0s", addr, expected, actual, line_text);
+            $finish;
+        end else begin
+            $display("[PASS] Stack[%d] stored: %d", addr, expected);
+        end
+    end
+    endtask
+
     // ==========================================
     // TEST EXECUTION SEQUENCE
     // ==========================================

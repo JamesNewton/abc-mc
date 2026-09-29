@@ -26,11 +26,15 @@
 `define RX_WIDTH 8
 `define REG_AWIDTH 5
 `define REG_DWIDTH 8
+`define STACK_AWIDTH 8
+`define STACK_DWIDTH 8
 `define OP_AWIDTH 8
 
 // In macros, we have to be careful with math, 
 // but the compiler will evaluate this literal perfectly.
 `define ASCII_OFFSET ("a" - "`")
+`define REG_R_RADIX ("r" - "a")
+`define REG_S_STACK ("s" - "a")
 
 `define ASCII_CR 8'd13
 `define ASCII_LF 8'd10

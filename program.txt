@@ -1,17 +1,19 @@
 # --- BASIC ACCUMULATION & COMBINATIONAL ALU ---
-f:7       # now f is 7
-f:f+3     # now f is 10
-f:f-3     # now f is 7
-f:f&4|1^2 # now f is 7
+f:7         # now f is 7
+f:f+3       # now f is 10
+f:f-3       # now f is 7
+f:f&4|1^2   # now f is 7
 
 # --- THE MULTI-CYCLE MATH ENGINE ---
-a:f*6     #now a is 42 Multiplication
-c:a/6+1   #now c is 8 Division (integer)
+a:f*6       #now a is 42 Multiplication
+c:a/6+1     #now c is 8 Division (integer)
 
 # --- RADIX FROM REGISTER 'r' ---
-r:16      #now r is 16 our radix is now hex.
-b:f       #now b is 15 not 7; a-f source digits, not variables
-r:a       #now r is 10 decimal; 'a' is 10 in hex, and we were in hex
+r:16        #now r is 16 our radix is now hex.
+b:f         #now b is 15 not 7; a-f source digits, not variables
+r:a         #now r is 10 decimal; 'a' is 10 in hex, and we were in hex
 
-# Note: Asserts happen at the end, so check the final value of a variable
-# not the value it has on the line. 
+# --- STACK. POINTER IS 's' ---
+s:0         #now s is 0 Clearing the stack
+z,42        #now s is 1 push 42 to stack
+            # now stack 0 is 42

@@ -16,25 +16,34 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
             code_part = line.split('#')[0]
             comment_part = line.split('#')[1] if '#' in line else ""
             
-            # 1. Parse Silicon Code & Advance PC
+            # Parse Silicon Code & Advance PC
             code_text = code_part.rstrip()
             if code_text:
                 code_text += '\n'
                 pc_counter += len(code_text) # Advance the simulated PC
                 hex_bytes.extend([f"{ord(c):02X}" for c in code_text])
 
-            # 2. Parse Assertions
+            # Parse Assertions
             tokens = comment_part.split()
             if "now" in tokens and "is" in tokens:
-                reg = tokens[tokens.index("now") + 1]
-                val = tokens[tokens.index("is") + 1]
-
+                now_idx = tokens.index("now")
+                is_idx = tokens.index("is")
+                
                 # Write the synchronization locks into the testbench
                 assert_lines.append(f'        // Sync to line: {original_line}')
                 assert_lines.append(f'        wait(system_top.cpu.pc == {pc_counter} && system_top.cpu.fsm_state == 0);')
                 assert_lines.append(f'        @(posedge clk); // Give memory 1 tick to save')
-                assert_lines.append(f'        assert_register("{reg}", {val}, "{original_line}");\n')
-    
+                
+                # Route to the correct Verilog task
+                if tokens[now_idx + 1] == "stack":
+                    addr = tokens[now_idx + 2]
+                    val = tokens[is_idx + 1]
+                    assert_lines.append(f'        assert_stack({addr}, {val}, "{original_line}");\n')
+                else:
+                    reg = tokens[now_idx + 1]
+                    val = tokens[is_idx + 1]
+                    assert_lines.append(f'        assert_register("{reg}", {val}, "{original_line}");\n')
+
     if len(hex_bytes) > memory_size:
         print(f"Error: Program ({len(hex_bytes)} bytes) exceeds memory!")
         return
