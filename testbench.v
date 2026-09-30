@@ -87,6 +87,20 @@ module testbench();
     end
     endtask
 
+    // Checks the 1-bit Condition Flag
+    task assert_flag(input expected, input [1023:0] line_text);
+    begin
+        @(posedge clk); 
+        
+        if (system_top.cpu.cmp_flag !== expected) begin
+            $display("[FAIL] Flag: Expected %d, but got %d in the line:\n  %0s", expected, system_top.cpu.cmp_flag, line_text);
+            $finish;
+        end else begin
+            $display("[PASS] Flag evaluated to: %s", expected == 1 ? "True" : "False");
+        end
+    end
+    endtask
+
     // ==========================================
     // TEST EXECUTION SEQUENCE
     // ==========================================

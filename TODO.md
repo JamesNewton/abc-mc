@@ -33,11 +33,14 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 - **Plan**: Build a LIFO buffer in silicon. Wire the push operator `,`
 - **Test**: `s:0\n z,42\n` s will be 1, z will be 0, and TOS 42
 
-**The Return Address:** Push the pc value to the stack when we see a [, so we know exactly where to jump back to when we hit a ].
+**The Condition Flag:** DONE
+- **Plan**: A dedicated 1-bit flip-flop (e.g., cmp_flag) that gets set or cleared by the comparison operators (<, >, =)
 
-**The Condition Flag:** A dedicated 1-bit flip-flop (e.g., cmp_flag) that gets set or cleared by the comparison operators (<, >, =)
+**The Return Address:** 
+- **Plan**: Push the pc value to the stack when we see a [, so we know exactly where to jump back to when we hit a ].
 
-**The Jump Mechanic:** The ability to physically overwrite the Program Counter (pc) during execution, rather than just passively letting it increment.
+**The Jump Mechanic:** 
+- **Plan**: The ability to physically overwrite the Program Counter (pc) during execution, rather than just passively letting it increment.
 
 **Implement Looping**
 Add logic for [ (start loop) and ] (end loop) to modify p.  

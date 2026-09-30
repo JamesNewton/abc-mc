@@ -33,12 +33,15 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
                 assert_lines.append(f'        // Sync to line: {original_line}')
                 assert_lines.append(f'        wait(system_top.cpu.pc == {pc_counter} && system_top.cpu.fsm_state == 0);')
                 assert_lines.append(f'        @(posedge clk); // Give memory 1 tick to save')
-                
+
                 # Route to the correct Verilog task
                 if tokens[now_idx + 1] == "stack":
                     addr = tokens[now_idx + 2]
                     val = tokens[is_idx + 1]
                     assert_lines.append(f'        assert_stack({addr}, {val}, "{original_line}");\n')
+                elif tokens[now_idx + 1] == "flag":
+                    val = tokens[is_idx + 1]
+                    assert_lines.append(f'        assert_flag({val}, "{original_line}");\n')
                 else:
                     reg = tokens[now_idx + 1]
                     val = tokens[is_idx + 1]

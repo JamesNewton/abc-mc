@@ -8,6 +8,12 @@ f:f&4|1^2   # now f is 7
 a:f*6       #now a is 42 Multiplication
 c:a/6+1     #now c is 8 Division (integer)
 
+# --- COMPARISON ---
+c<a       # now flag is 1
+c>a       # now flag is 0
+c=8       # now flag is 1
+c=f       # now flag is 0
+
 # --- RADIX FROM REGISTER 'r' ---
 r:16        #now r is 16 our radix is now hex.
 b:f         #now b is 15 not 7; a-f source digits, not variables

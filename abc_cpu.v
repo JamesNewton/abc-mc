@@ -52,6 +52,7 @@ module abc_cpu#(
     reg [`INST_WIDTH-1:0] next_char;
     reg [STATE_WIDTH-1:0] return_state;
     reg [`REG_AWIDTH-1:0] cpu_radix;
+    reg cmp_flag; // condition flag
 
     // --- THE DYNAMIC LEXER ---
     wire is_hex_char = (inst_byte >= "a" && inst_byte <= "f");
@@ -77,6 +78,8 @@ module abc_cpu#(
         .read_addr(pc),
         .read_data(inst_byte)
     );
+
+    wire is_cmp_op = (op_sel == "<" || op_sel == ">" || op_sel == "=");
 
     // --- STACK MEMORY (BRAM) ---
     wire [7:0] stack_read_data;
@@ -162,6 +165,9 @@ module abc_cpu#(
             // Synthesizes into dedicated DSP slices (or heavy LUT logic). Completes in 0 cycles!
             "*": alu_result = reg_data_a * alu_operand_b;
 `endif
+            "<": alu_result = (reg_data_a < alu_operand_b) ? 1 : 0;
+            ">": alu_result = (reg_data_a > alu_operand_b) ? 1 : 0;
+            "=": alu_result = (reg_data_a == alu_operand_b) ? 1 : 0;
             ",": alu_result = reg_data_a + 1; // push NUM to Stack
             // If no valid operator is set (or for direct assignment), just pass Operand B through
             default: alu_result = alu_operand_b; 
@@ -186,6 +192,7 @@ module abc_cpu#(
             stack_write_data <= 0;
             cpu_radix <= 10;
             math_start <= 0;
+            cmp_flag <= 0;
         end else begin
             
             // DEFAULT ASSIGNMENT (1-cycle pulse)
@@ -336,8 +343,12 @@ module abc_cpu#(
                             end else
 `endif
                             begin
-                                reg_write_en <= 1;
-                                reg_write_data <= alu_result;
+                                if (is_cmp_op) begin
+                                    cmp_flag <= alu_result[0]; // Save to flag
+                                end else begin
+                                    reg_write_en <= 1;         // Save to register
+                                    reg_write_data <= alu_result;
+                                end
                                 fsm_state <= STATE_EXEC;
                             end
                         end else begin
@@ -357,8 +368,12 @@ module abc_cpu#(
                             end else
 `endif
                             begin
-                                reg_write_en <= 1;
-                                reg_write_data <= alu_result;
+                                if (is_cmp_op) begin
+                                    cmp_flag <= alu_result[0]; // Save to flag
+                                end else begin
+                                    reg_write_en <= 1;         // Save to register
+                                    reg_write_data <= alu_result;
+                                end
                                 fsm_state <= STATE_EXEC;
                             end
                         end else begin
