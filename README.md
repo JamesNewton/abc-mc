@@ -1,6 +1,12 @@
 # ABC Silicon Architecture
 
-This project is a hardware implementation of the [ABC Virtual](https://github.com/JamesNewton/ABC) Machine, designed in Verilog for synthesis on FPGAs (like the Lattice iCE40). It translates the high-level, string-evaluated C++ ABC language directly into a digital logic pipeline.
+This project is a hardware implementation of the [ABC Virtual](https://github.com/JamesNewton/ABC) Machine, designed in Verilog for synthesis on FPGAs (like the Lattice iCE40). It translates the [high-level, string-evaluated C++ ABC language](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller/tree/abc-pio#abc-device-peripheral) directly into a digital logic pipeline.
+
+So this *directly* executes instructions (not source code) like `c:a/6+1`; taking the value of a, dividing by 6 and adding 1, placing the result in variable c. 
+
+*Human readable machine code.*
+
+This is a work in progress: See the source [program.txt](program.txt) file for the current functionality. This file is "compiled" into hex to load into the FPGA RAM and into asserts for the [testbench.v](testbench.v) file to simulate. 
 
 ## The Execution Pipeline (DST-OP-SRC)
 The heart of the processor is a Finite State Machine (FSM) tracking the `dst_op_src` sequence. 
