@@ -41,7 +41,7 @@ Raw ASCII bytes from the instruction stream are decoded in hardware using combin
 # The Original Language
 
 ABC has already been implemented as a C++ byte code interpreter: https://github.com/JamesNewton/ABC 
-This copy of the commands, taken from that implementation, serve as a goal for this project.
+This copy of the commands, taken from [this implementation](https://github.com/JamesNewton/Arduino_Dynamixel_Stepper_Controller/tree/abc-pio#abc-device-peripheral), serve as a goal for this project.
 
 ## Commands
 
