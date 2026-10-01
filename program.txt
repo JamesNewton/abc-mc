@@ -35,3 +35,8 @@ l+1         # Could also be l:l+1
 l<3         # Test the exit condition
 ]           # now l is 3 True? PC:TOS : pop TOS
             # now s is 0 because the stack was emptied
+
+# --- CONDITIONAL ---
+a:5
+a=5? b:1 ! b:0   # now b is 1 because the condition was true
+a<5? c:1 ! c:0   # now c is 0 because a is not less than 5

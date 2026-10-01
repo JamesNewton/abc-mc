@@ -88,3 +88,13 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("s", 0, "# now s is 0 because the stack was emptied");
 
+        // Sync to line: a=5? b:1 ! b:0   # now b is 1 because the condition was true
+        wait(system_top.cpu.pc == 117 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("b", 1, "a=5? b:1 ! b:0   # now b is 1 because the condition was true");
+
+        // Sync to line: a<5? c:1 ! c:0   # now c is 0 because a is not less than 5
+        wait(system_top.cpu.pc == 132 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("c", 0, "a<5? c:1 ! c:0   # now c is 0 because a is not less than 5");
+

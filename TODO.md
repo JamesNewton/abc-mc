@@ -36,13 +36,13 @@ Transitioning the CPU from a live UART listener to a stored-program architecture
 **The Condition Flag:** DONE
 - **Plan**: A dedicated 1-bit flip-flop (e.g., cmp_flag) that gets set or cleared by the comparison operators (<, >, =)
 
-**The Return Address:** 
+**The Return Address:** DONE
 - **Plan**: Push the pc value to the stack when we see a [, so we know exactly where to jump back to when we hit a ].
 
-**The Jump Mechanic:** 
+**The Jump Mechanic:** DONE
 - **Plan**: The ability to physically overwrite the Program Counter (pc) during execution, rather than just passively letting it increment.
 
-**Implement Looping**
+**Implement Looping** DONE
 Add logic for [ (start loop) and ] (end loop) to modify p.  
 
 - **Test**: Load BRAM with 
@@ -54,7 +54,8 @@ a<3~
 ]
 ```
 
-- **Assertion**: Run simulation for 100 cycles, `assert_register("a", 3)`.
+**Implement Conditionals** 
+- **Plan**: Add skip_flag, STATE_DST skips if set. '?' sets it if false, '!' sets it otherwise, and EOL clears it.
 
 **5. Main RAM & Data Indexing (@)**
 - **Plan**: Instantiate a second BRAM block. Add a memory state to the FSM to handle the @ (index) operator, taking an extra clock cycle to read/write from this expanded data bus.  

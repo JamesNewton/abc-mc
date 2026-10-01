@@ -53,6 +53,7 @@ module abc_cpu#(
     reg [STATE_WIDTH-1:0] return_state;
     reg [`REG_AWIDTH-1:0] cpu_radix;
     reg cmp_flag; // condition flag
+    reg skip_flag; // line-skip firewall
 
     // --- THE DYNAMIC LEXER ---
     wire is_hex_char = (inst_byte >= "a" && inst_byte <= "f");
@@ -195,6 +196,7 @@ module abc_cpu#(
             cpu_radix <= 10;
             math_start <= 0;
             cmp_flag <= 0;
+            skip_flag <= 0;
         end else begin
             
             // DEFAULT ASSIGNMENT (1-cycle pulse)
@@ -220,11 +222,20 @@ module abc_cpu#(
                     
                     fsm_state <= STATE_STACK_INC; // Divert!
                 end else begin
-                    // Normal execution routing
-                    // Now evaluate the character that triggered us
+                    // Evaluate the character that triggered the execution
                     if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
                         fsm_state <= STATE_FETCH;
                         return_state <= STATE_DST;
+                    // Intercept '?'
+                    end else if (next_char == "?") begin
+                        if (!cmp_flag) skip_flag <= 1; // If false, turn on the skip firewall!
+                        fsm_state <= STATE_FETCH;
+                        return_state <= STATE_DST; // Reset to expect a new DST
+                    // Intercept '!'
+                    end else if (next_char == "!") begin
+                        skip_flag <= 1; // True branch finished naturally, skip the false branch!
+                        fsm_state <= STATE_FETCH;
+                        return_state <= STATE_DST; // Reset to expect a new DST
                     end else begin
                         op_sel <= next_char[`OP_AWIDTH-1:0];
                         return_state <= STATE_SRC;
@@ -276,7 +287,24 @@ module abc_cpu#(
                 // instruction_byte is now valid! 
                 // Increment the PC for the next fetch, and move to decode.
                 pc <= pc + 1;
-                fsm_state <= return_state; // Dynamic return
+                if (skip_flag) begin
+                    // If skipping, aggressively throw away bytes until we hit an escape character
+                    if (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR) begin
+                        skip_flag <= 0;
+                        fsm_state <= STATE_DST; // End of line: stop skipping
+                    end else if (inst_byte == "!") begin
+                        skip_flag <= 0;
+                        fsm_state <= STATE_DST; // Hit the 'Else' block: stop skipping!
+                    end else begin
+                        fsm_state <= STATE_FETCH;
+                    end
+                end else if (inst_byte == " " || inst_byte == 8'd9) begin
+                    // GLOBAL WHITESPACE FILTER: Ignore spaces and tabs
+                    fsm_state <= STATE_FETCH;
+                end else begin
+                    // Valid byte: send it to the active pipeline state
+                    fsm_state <= return_state; // Dynamic return
+                end
             end
 
             // THE STANDARD PIPELINE
@@ -286,7 +314,7 @@ module abc_cpu#(
                         if (is_reg) begin
                             dst_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                             return_state <= STATE_OP;
-                            fsm_state <= STATE_FETCH;
+                            fsm_state <= STATE_FETCH; 
                         end else if (is_num) begin
                             dst_sel <= 25; // 'z' acts as a harmless bit-bucket
                             literal_num <= digit_val; 
