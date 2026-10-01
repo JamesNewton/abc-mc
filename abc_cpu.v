@@ -95,7 +95,8 @@ module abc_cpu#(
         
         // The Stack Pointer (s) is always the memory address!
         .write_addr(system_top.regs.memory[`REG_S_STACK]), 
-        .read_addr(system_top.regs.memory[`REG_S_STACK]),
+        // Continuously output the TOP of the stack (s - 1)
+        .read_addr(system_top.regs.memory[`REG_S_STACK] - 8'd1),
         // route the s register data out of the Register File 
         // to feed the Stack's address ports        
         .write_data(stack_write_data),
@@ -169,6 +170,7 @@ module abc_cpu#(
             ">": alu_result = (reg_data_a > alu_operand_b) ? 1 : 0;
             "=": alu_result = (reg_data_a == alu_operand_b) ? 1 : 0;
             ",": alu_result = reg_data_a + 1; // push NUM to Stack
+            "]": alu_result = reg_data_a - 1; // pop Stack
             // If no valid operator is set (or for direct assignment), just pass Operand B through
             default: alu_result = alu_operand_b; 
         endcase
@@ -284,7 +286,40 @@ module abc_cpu#(
                         if (is_reg) begin
                             dst_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
                             return_state <= STATE_OP;
-                            fsm_state <= STATE_FETCH; // Consume and fetch next
+                            fsm_state <= STATE_FETCH;
+                        end else if (is_num) begin
+                            dst_sel <= 25; // 'z' acts as a harmless bit-bucket
+                            literal_num <= digit_val; 
+                            src_is_literal <= 1;
+                            return_state <= STATE_NUM;
+                            fsm_state <= STATE_FETCH;
+                        // START LOOP (Push PC)
+                        end else if (inst_byte == "[") begin
+                            stack_write_en <= 1;
+                            // pc already points to the next char
+                            stack_write_data <= pc;
+                            // Setup ALU to increment 's'
+                            dst_sel <= `REG_S_STACK;
+                            src_sel <= `REG_S_STACK;
+                            op_sel <= ",";
+                            fsm_state <= STATE_STACK_INC;
+                            return_state <= STATE_DST;
+                        // END LOOP (Jump or Pop)
+                        end else if (inst_byte == "]") begin
+                            if (cmp_flag) begin
+                                // JUMP BACK: Overwrite the Program Counter!
+                                pc <= stack_read_data; 
+                                fsm_state <= STATE_FETCH;
+                                return_state <= STATE_DST;
+                            end else begin
+                                // EXIT LOOP: Pop the stack by decrementing 's'
+                                dst_sel <= `REG_S_STACK;
+                                src_sel <= `REG_S_STACK;
+                                op_sel <= "]"; 
+                                
+                                fsm_state <= STATE_STACK_INC;
+                                return_state <= STATE_DST;
+                            end
                         end else begin
                             fsm_state <= STATE_FETCH; // Ignore junk, fetch next
                             return_state <= STATE_DST;

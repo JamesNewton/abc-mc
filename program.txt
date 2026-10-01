@@ -1,3 +1,6 @@
+# The instructions are converted to program.hex and loaded into the
+# processor RAM. The "now x is y" are parsed into asserts.vh
+
 # --- BASIC ACCUMULATION & COMBINATIONAL ALU ---
 f:7         # now f is 7
 f:f+3       # now f is 10
@@ -23,3 +26,12 @@ r:a         #now r is 10 decimal; 'a' is 10 in hex, and we were in hex
 s:0         #now s is 0 Clearing the stack
 z,42        #now s is 1 push 42 to stack
             # now stack 0 is 42
+
+# --- LOOP ---
+s:0         # Clear the stack
+l:0         # Initialize a loop counter
+[           # Start the loop, push PC
+l+1         # Could also be l:l+1
+l<3         # Test the exit condition
+]           # now l is 3 True? PC:TOS : pop TOS
+            # now s is 0 because the stack was emptied

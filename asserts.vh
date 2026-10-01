@@ -78,3 +78,13 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_stack(0, 42, "# now stack 0 is 42");
 
+        // Sync to line: ]           # now l is 3 True? PC:TOS : pop TOS
+        wait(system_top.cpu.pc == 98 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("l", 3, "]           # now l is 3 True? PC:TOS : pop TOS");
+
+        // Sync to line: # now s is 0 because the stack was emptied
+        wait(system_top.cpu.pc == 98 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("s", 0, "# now s is 0 because the stack was emptied");
+
