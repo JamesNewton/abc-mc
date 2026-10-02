@@ -54,15 +54,15 @@ a<3~
 ]
 ```
 
-**Implement Conditionals** 
+**Implement Conditionals** DONE
 - **Plan**: Add skip_flag, STATE_DST skips if set. '?' sets it if false, '!' sets it otherwise, and EOL clears it.
 
-**5. Main RAM & Data Indexing (@)**
+**Main RAM & Data Indexing (@)**
 - **Plan**: Instantiate a second BRAM block. Add a memory state to the FSM to handle the @ (index) operator, taking an extra clock cycle to read/write from this expanded data bus.  
 - **Test Case**: Send `0@:42\na:0@\n`. (Write 42 to memory address 0, then read it into a).
 - **Assertion**: `assert_register("a", 42)`.
 
-**6. Hardware Call Stack (s)**
+**Hardware Call Stack (s)**
 - **Plan**: Wire the parameter setup `(`, and call operator `)` to increment/decrement the `s` register and push/pop data to the LIFO.  
 - **Test Case**: Send `(5,6)`
 - **Assertion**: Assert the internal hardware stack has a depth of 2, and the top element is 6.
@@ -70,13 +70,13 @@ a<3~
 ## Phase 3: System-on-Chip (SoC) Peripherals
 Wiring the CPU to the physical world using the crossbar switch.
 
-**7.  MMIO Crossbar & GPIO Allocation**
+**MMIO Crossbar & GPIO Allocation**
 - **Plan**: Use Verilog `generate` blocks to instantiate a configurable number of `SB_IO` primitives. Expand `dst_sel` to 7 bits to support addresses > 25. Build a demultiplexer to route `D('OUT', pin, value)` commands to the correct `SB_IO` block.  
 - **Test Case**: Send `D('OUT', 1, 1)`
  (Assuming the macro maps to a valid numeric sequence).
  - **Assertion**: Assert the physical FPGA pad for pin 1 drives HIGH.
  
- **8. Sigma-Delta Analog Input**
+ **Sigma-Delta Analog Input**
  - **Plan**: Build a digital low-pass filter counter. Wire it to an SB_IO primitive configured as a differential comparator (LVDS). Route it to MMIO so it can be read via `D('ANALOG', pin)`.  
  - **Test Case**: Drive the testbench analog simulation pin with a 50% duty cycle square wave, then execute `a:D('A', 1)`
  (or equivalent compiled byte sequence).

@@ -24,3 +24,4 @@ abc_sim
 !.vscode/tasks.json
 .DS_Store
 *.swp
+original/*
