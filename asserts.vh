@@ -98,3 +98,8 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("c", 0, "a<5? c:1 ! c:0   # now c is 0 because a is not less than 5");
 
+        // Sync to line: # now j is 59
+        wait(system_top.cpu.pc == 147 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("j", 59, "# now j is 59");
+

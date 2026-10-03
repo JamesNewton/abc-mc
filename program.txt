@@ -40,3 +40,10 @@ l<3         # Test the exit condition
 a:5
 a=5? b:1 ! b:0   # now b is 1 because the condition was true
 a<5? c:1 ! c:0   # now c is 0 because a is not less than 5
+
+# --- INDEXING ---
+i:0       # Initialize base
+j:0       # Initialize offset target
+
+i@1:59    # Shift pointer by 1, assign 59
+          # now j is 59

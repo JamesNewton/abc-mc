@@ -82,7 +82,7 @@ module testbench();
             $display("[FAIL] Stack[%d]: Expected %d, but got %d in the line:\n  %0s", addr, expected, actual, line_text);
             $finish;
         end else begin
-            $display("[PASS] Stack[%d] stored: %d", addr, expected);
+            $display("[PASS] Stack [%d ] stored: %d", addr, expected);
         end
     end
     endtask

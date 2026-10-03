@@ -57,7 +57,7 @@ a<3~
 **Implement Conditionals** DONE
 - **Plan**: Add skip_flag, STATE_DST skips if set. '?' sets it if false, '!' sets it otherwise, and EOL clears it.
 
-**Main RAM & Data Indexing (@)**
+**Main RAM & Data Indexing (@)** DONE
 - **Plan**: Instantiate a second BRAM block. Add a memory state to the FSM to handle the @ (index) operator, taking an extra clock cycle to read/write from this expanded data bus.  
 - **Test Case**: Send `0@:42\na:0@\n`. (Write 42 to memory address 0, then read it into a).
 - **Assertion**: `assert_register("a", 42)`.

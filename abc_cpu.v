@@ -208,8 +208,8 @@ module abc_cpu#(
 
             // THE STALL PIPELINE
             if (fsm_state == STATE_EXEC) begin
-                // The memory write is done. 
-                // Check the CURRENT operation being executed
+                // The memory write is done (or handled here for state mutators like @ and ,)
+                // EXECUTE THE OPERATION
                 if (op_sel == ",") begin
                     // Write the value to the Stack Memory
                     stack_write_en <= 1;
@@ -221,8 +221,14 @@ module abc_cpu#(
                     op_sel <= ","; // Trigger ALU to add 1
                     
                     fsm_state <= STATE_STACK_INC; // Divert!
-                end else begin
-                    // Evaluate the character that triggered the execution
+                end else if (op_sel == "@") begin
+                    // The Pointer Mutator
+                    // Physically shift the destination address, but do NOT pulse the write enable!
+                    dst_sel <= dst_sel + alu_operand_b[`REG_AWIDTH-1:0];
+                end
+                // ROUTE NEXT CHARACTER
+                // (Only route if we didn't divert to the stack increment state)
+                if (op_sel != ",") begin
                     if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
                         fsm_state <= STATE_FETCH;
                         return_state <= STATE_DST;
@@ -406,7 +412,9 @@ module abc_cpu#(
                             end else
 `endif
                             begin
-                                if (is_cmp_op) begin
+                                if (op_sel == "@" || op_sel == ",") begin
+                                    // Let STATE_EXEC handle pointer mutations and stack pushes
+                                end else if (is_cmp_op) begin
                                     cmp_flag <= alu_result[0]; // Save to flag
                                 end else begin
                                     reg_write_en <= 1;         // Save to register
@@ -431,7 +439,9 @@ module abc_cpu#(
                             end else
 `endif
                             begin
-                                if (is_cmp_op) begin
+                                if (op_sel == "@" || op_sel == ",") begin
+                                    // Let STATE_EXEC handle pointer mutations and stack pushes
+                                end else if (is_cmp_op) begin
                                     cmp_flag <= alu_result[0]; // Save to flag
                                 end else begin
                                     reg_write_en <= 1;         // Save to register
