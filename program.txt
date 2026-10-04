@@ -38,12 +38,30 @@ l<3         # Test the exit condition
 
 # --- CONDITIONAL ---
 a:5
-a=5? b:1 ! b:0   # now b is 1 because the condition was true
-a<5? c:1 ! c:0   # now c is 0 because a is not less than 5
+a=5? b:1 ! b:0 .  # now b is 1 because the condition was true
+a:0
+a<5?
+ c:1
+ d:2
+!
+ c:0
+ d:1
+.         # now c is 1
+          # now d is 2
+b:0
+a>5? b:1; c:1.  # now b is 0 (Because b was never initialized)
+                # now c is 1 (True branch skipped, c remains 1)
 
 # --- INDEXING ---
-i:0       # Initialize base
-j:0       # Initialize offset target
+i:0       # Initialize base array
+j:1       # Initialize index 1
+k:2       # Initialize index 2
+i@1:2     # Write 2 to array index 1 (j)
+          # now j is 2
+i@k:42    # Write 42 to array index 2 (k)
+x:i@1     # Read array index 1 into x. now x is 2
+y:i@j     # Read array index 2 into y. now y is 42
 
-i@1:59    # Shift pointer by 1, assign 59
-          # now j is 59
+a@1:2     # Write 2 to memory address a+1 aka b so now b is 2
+c:3       # now c is 3
+d:a@b     # Write a@b (aka c) to d so now d is 3

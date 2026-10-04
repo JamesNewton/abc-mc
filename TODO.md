@@ -59,8 +59,11 @@ a<3~
 
 **Main RAM & Data Indexing (@)** DONE
 - **Plan**: Instantiate a second BRAM block. Add a memory state to the FSM to handle the @ (index) operator, taking an extra clock cycle to read/write from this expanded data bus.  
-- **Test Case**: Send `0@:42\na:0@\n`. (Write 42 to memory address 0, then read it into a).
-- **Assertion**: `assert_register("a", 42)`.
+- **Test Case**: Send `a@1:2\nc:3\nc:a@b`. (Write 2 to memory address a+1 aka b, set c to 3, write a@b (aka c) to d).
+- **Assertion**: `assert_register("b", 2); assert_register("d", 3);`.
+
+**Quote Strings to Memory**
+- **Plan**: 
 
 **Hardware Call Stack (s)**
 - **Plan**: Wire the parameter setup `(`, and call operator `)` to increment/decrement the `s` register and push/pop data to the LIFO.  

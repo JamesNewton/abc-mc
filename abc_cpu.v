@@ -18,7 +18,8 @@ module abc_cpu#(
     parameter STATE_EXEC       = STATE_WAIT + 1,       //execute dst, op, src
     parameter STATE_MATH       = STATE_EXEC + 1,       //do multi-cycle math
     parameter STATE_STACK_INC  = STATE_MATH + 1,       //increment stack
-    parameter STATE_MAX        = STATE_STACK_INC + 1,  //counts of states
+    parameter STATE_DEREF      = STATE_STACK_INC + 1,  //pointer read delay
+    parameter STATE_MAX        = STATE_DEREF + 1,      //counts of states
     parameter STATE_WIDTH      = $clog2(STATE_MAX)
     )(
     input clk,
@@ -54,7 +55,8 @@ module abc_cpu#(
     reg [`REG_AWIDTH-1:0] cpu_radix;
     reg cmp_flag; // condition flag
     reg skip_flag; // line-skip firewall
-
+    reg [`REG_AWIDTH-1:0] active_sub_addr; // Holds the base pointer
+    reg has_sub_addr;                      // Triggers the dereference detour
     // --- THE DYNAMIC LEXER ---
     wire is_hex_char = (inst_byte >= "a" && inst_byte <= "f");
     // Only treat a-f as numbers if we are actively expecting a Source or building a Number
@@ -119,7 +121,8 @@ module abc_cpu#(
     // Instantly evaluates the input byte type; 0 clock cycles
     wire is_num = (inst_byte >= "0" && inst_byte <= "9") || (parse_as_hex && is_hex_char);
     wire is_reg = (inst_byte >= "a" && inst_byte <= "z") && !is_num;
-    wire is_eol = (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR);
+    wire is_eol = (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR || inst_byte == ";");
+    wire next_is_eol = (next_char == `ASCII_LF || next_char == `ASCII_CR || next_char == ";");
     wire is_op  = (!is_reg && !is_num && !is_eol); 
 
     // Extract the numeric value (0-9 or 10-15)
@@ -197,6 +200,8 @@ module abc_cpu#(
             math_start <= 0;
             cmp_flag <= 0;
             skip_flag <= 0;
+            active_sub_addr <= 0;
+            has_sub_addr <= 0;
         end else begin
             
             // DEFAULT ASSIGNMENT (1-cycle pulse)
@@ -229,7 +234,7 @@ module abc_cpu#(
                 // ROUTE NEXT CHARACTER
                 // (Only route if we didn't divert to the stack increment state)
                 if (op_sel != ",") begin
-                    if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                    if (next_is_eol || next_char == ".") begin
                         fsm_state <= STATE_FETCH;
                         return_state <= STATE_DST;
                     // Intercept '?'
@@ -271,15 +276,44 @@ module abc_cpu#(
                 stack_write_en <= 0;          // Drop the BRAM write pulse
                 reg_write_en <= 1;            // Fire the register write pulse
                 reg_write_data <= alu_result; // ALU has safely calculated s + 1
-                
-                // Now we must route the interrupted character just like STATE_EXEC
-                if (next_char == `ASCII_LF || next_char == `ASCII_CR) begin
+                // ROUTE NEXT CHARACTER
+                if (next_is_eol || next_char == ".") begin
+                    fsm_state <= STATE_FETCH;
+                    return_state <= STATE_DST;
+                end else if (next_char == "?") begin
+                    if (!cmp_flag) skip_flag <= 1;
+                    fsm_state <= STATE_FETCH;
+                    return_state <= STATE_DST;
+                end else if (next_char == "!") begin
+                    skip_flag <= 1;
                     fsm_state <= STATE_FETCH;
                     return_state <= STATE_DST;
                 end else begin
                     op_sel <= next_char[`OP_AWIDTH-1:0];
                     return_state <= STATE_SRC;
                     fsm_state <= STATE_FETCH;
+                end
+            end
+            // --- DEREFERENCE DETOUR ---
+            else if (fsm_state == STATE_DEREF) begin
+                // The register file has safely output the new dereferenced data.
+                // Pass the baton back to the execution engine.
+`ifdef MULTI_CYCLE_MATH
+                if (is_multi_cycle_op) begin
+                    math_start <= 1;          
+                    fsm_state <= STATE_MATH;  
+                end else
+`endif
+                begin
+                    if (op_sel == "@" || op_sel == ",") begin
+                        // Handled in STATE_EXEC
+                    end else if (is_cmp_op) begin
+                        cmp_flag <= alu_result[0];
+                    end else begin
+                        reg_write_en <= 1; // Fire the delayed write pulse
+                        reg_write_data <= alu_result;
+                    end
+                    fsm_state <= STATE_EXEC;
                 end
             end
 
@@ -295,9 +329,9 @@ module abc_cpu#(
                 pc <= pc + 1;
                 if (skip_flag) begin
                     // If skipping, aggressively throw away bytes until we hit an escape character
-                    if (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR) begin
+                    if (inst_byte == ".") begin
                         skip_flag <= 0;
-                        fsm_state <= STATE_DST; // End of line: stop skipping
+                        fsm_state <= STATE_DST; // End of block: stop skipping
                     end else if (inst_byte == "!") begin
                         skip_flag <= 0;
                         fsm_state <= STATE_DST; // Hit the 'Else' block: stop skipping!
@@ -327,6 +361,18 @@ module abc_cpu#(
                             src_is_literal <= 1;
                             return_state <= STATE_NUM;
                             fsm_state <= STATE_FETCH;
+                        // LINE BLOCK CONTROL
+                        end else if (inst_byte == "?") begin
+                            if (!cmp_flag) skip_flag <= 1;
+                            fsm_state <= STATE_FETCH;
+                            return_state <= STATE_DST;
+                        end else if (inst_byte == "!") begin
+                            skip_flag <= 1; // True branch finished naturally, skip the false branch
+                            fsm_state <= STATE_FETCH;
+                            return_state <= STATE_DST;
+                        end else if (inst_byte == ".") begin
+                            fsm_state <= STATE_FETCH; // No-op block terminator
+                            return_state <= STATE_DST;
                         // START LOOP (Push PC)
                         end else if (inst_byte == "[") begin
                             stack_write_en <= 1;
@@ -401,26 +447,38 @@ module abc_cpu#(
                             
                             return_state <= STATE_NUM;
                             fsm_state <= STATE_FETCH; // Consume digit, fetch next
-                            
+                        // INTERCEPT '@' Save base, fetch offset!
+                        end else if (inst_byte == "@") begin
+                            active_sub_addr <= literal_num[`REG_AWIDTH-1:0];
+                            has_sub_addr <= 1;
+                            fsm_state <= STATE_FETCH;
+                            return_state <= STATE_SRC;
                         end else if (is_op || is_eol) begin
                             // Trigger execution.
                             next_char <= inst_byte; // Latch the trigger character
+                            if (has_sub_addr) begin
+                                src_sel <= active_sub_addr + alu_operand_b[`REG_AWIDTH-1:0];
+                                src_is_literal <= 0; 
+                                has_sub_addr <= 0;
+                                fsm_state <= STATE_DEREF; // Detour to read memory!
+                            end else begin
 `ifdef MULTI_CYCLE_MATH
-                            if ( is_multi_cycle_op ) begin
-                                math_start <= 1;          
-                                fsm_state <= STATE_MATH;  
-                            end else
+                                if ( is_multi_cycle_op ) begin
+                                    math_start <= 1;          
+                                    fsm_state <= STATE_MATH;  
+                                end else
 `endif
-                            begin
-                                if (op_sel == "@" || op_sel == ",") begin
-                                    // Let STATE_EXEC handle pointer mutations and stack pushes
-                                end else if (is_cmp_op) begin
-                                    cmp_flag <= alu_result[0]; // Save to flag
-                                end else begin
-                                    reg_write_en <= 1;         // Save to register
-                                    reg_write_data <= alu_result;
+begin
+                                    if (op_sel == "@" || op_sel == ",") begin
+                                        // Let STATE_EXEC handle pointer mutations and stack pushes
+                                    end else if (is_cmp_op) begin
+                                        cmp_flag <= alu_result[0]; // Save to flag
+                                    end else begin
+                                        reg_write_en <= 1;         // Save to register
+                                        reg_write_data <= alu_result;
+                                    end
+                                    fsm_state <= STATE_EXEC;
                                 end
-                                fsm_state <= STATE_EXEC;
                             end
                         end else begin
                             return_state <= STATE_NUM;
@@ -429,25 +487,38 @@ module abc_cpu#(
                     end
                     
                     STATE_WAIT: begin
-                        if (is_op || is_eol) begin
+                        // OUT OF TURN INTERCEPTION: Save base, fetch offset!
+                        if (inst_byte == "@") begin
+                            active_sub_addr <= src_sel;
+                            has_sub_addr <= 1;
+                            fsm_state <= STATE_FETCH;
+                            return_state <= STATE_SRC;
+                        end else if (is_op || is_eol) begin
                             // Trigger execution.
                             next_char <= inst_byte;
+                            if (has_sub_addr) begin
+                                src_sel <= active_sub_addr + alu_operand_b[`REG_AWIDTH-1:0];
+                                src_is_literal <= 0; 
+                                has_sub_addr <= 0;
+                                fsm_state <= STATE_DEREF; // Detour to read memory
+                            end else begin
 `ifdef MULTI_CYCLE_MATH
-                            if (is_multi_cycle_op) begin
-                                math_start <= 1;          
-                                fsm_state <= STATE_MATH;  
-                            end else
+                                if (is_multi_cycle_op) begin
+                                    math_start <= 1;          
+                                    fsm_state <= STATE_MATH;  
+                                end else
 `endif
-                            begin
-                                if (op_sel == "@" || op_sel == ",") begin
+                                begin
+                                    if (op_sel == "@" || op_sel == ",") begin
                                     // Let STATE_EXEC handle pointer mutations and stack pushes
-                                end else if (is_cmp_op) begin
-                                    cmp_flag <= alu_result[0]; // Save to flag
-                                end else begin
-                                    reg_write_en <= 1;         // Save to register
-                                    reg_write_data <= alu_result;
+                                    end else if (is_cmp_op) begin
+                                        cmp_flag <= alu_result[0]; // Save to flag
+                                    end else begin
+                                        reg_write_en <= 1;         // Save to register
+                                        reg_write_data <= alu_result;
+                                    end
+                                    fsm_state <= STATE_EXEC;
                                 end
-                                fsm_state <= STATE_EXEC;
                             end
                         end else begin
                             return_state <= STATE_WAIT;
@@ -455,11 +526,14 @@ module abc_cpu#(
                         end
                     end
 
-                    default: fsm_state <= STATE_DST;
-                endcase
-            end
-        end
-    end
+                    default: begin
+                        has_sub_addr <= 0; // Failsafe clearing
+                        fsm_state <= STATE_DST;
+                    end
+                endcase //fsm_state
+            end //end standard pipeline
+        end //not resetting
+    end //PARSER FSM
 
     always @(*) begin
         state = fsm_state;

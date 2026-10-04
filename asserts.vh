@@ -88,18 +88,58 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("s", 0, "# now s is 0 because the stack was emptied");
 
-        // Sync to line: a=5? b:1 ! b:0   # now b is 1 because the condition was true
-        wait(system_top.cpu.pc == 117 && system_top.cpu.fsm_state == 0);
+        // Sync to line: a=5? b:1 ! b:0 .  # now b is 1 because the condition was true
+        wait(system_top.cpu.pc == 119 && system_top.cpu.fsm_state == 0);
         @(posedge clk); // Give memory 1 tick to save
-        assert_register("b", 1, "a=5? b:1 ! b:0   # now b is 1 because the condition was true");
+        assert_register("b", 1, "a=5? b:1 ! b:0 .  # now b is 1 because the condition was true");
 
-        // Sync to line: a<5? c:1 ! c:0   # now c is 0 because a is not less than 5
-        wait(system_top.cpu.pc == 132 && system_top.cpu.fsm_state == 0);
+        // Sync to line: .         # now c is 1
+        wait(system_top.cpu.pc == 152 && system_top.cpu.fsm_state == 0);
         @(posedge clk); // Give memory 1 tick to save
-        assert_register("c", 0, "a<5? c:1 ! c:0   # now c is 0 because a is not less than 5");
+        assert_register("c", 1, ".         # now c is 1");
 
-        // Sync to line: # now j is 59
-        wait(system_top.cpu.pc == 147 && system_top.cpu.fsm_state == 0);
+        // Sync to line: # now d is 2
+        wait(system_top.cpu.pc == 152 && system_top.cpu.fsm_state == 0);
         @(posedge clk); // Give memory 1 tick to save
-        assert_register("j", 59, "# now j is 59");
+        assert_register("d", 2, "# now d is 2");
+
+        // Sync to line: a>5? b:1; c:1.  # now b is 0 (Because b was never initialized)
+        wait(system_top.cpu.pc == 171 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("b", 0, "a>5? b:1; c:1.  # now b is 0 (Because b was never initialized)");
+
+        // Sync to line: # now c is 1 (True branch skipped, c remains 1)
+        wait(system_top.cpu.pc == 171 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("c", 1, "# now c is 1 (True branch skipped, c remains 1)");
+
+        // Sync to line: # now j is 2
+        wait(system_top.cpu.pc == 189 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("j", 2, "# now j is 2");
+
+        // Sync to line: x:i@1     # Read array index 1 into x. now x is 2
+        wait(system_top.cpu.pc == 202 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("x", 2, "x:i@1     # Read array index 1 into x. now x is 2");
+
+        // Sync to line: y:i@j     # Read array index 2 into y. now y is 42
+        wait(system_top.cpu.pc == 208 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("y", 42, "y:i@j     # Read array index 2 into y. now y is 42");
+
+        // Sync to line: a@1:2     # Write 2 to memory address a+1 aka b so now b is 2
+        wait(system_top.cpu.pc == 214 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("b", 2, "a@1:2     # Write 2 to memory address a+1 aka b so now b is 2");
+
+        // Sync to line: c:3       # now c is 3
+        wait(system_top.cpu.pc == 218 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("c", 3, "c:3       # now c is 3");
+
+        // Sync to line: d:a@b     # Write a@b (aka c) to d so now d is 3
+        wait(system_top.cpu.pc == 224 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_register("d", 3, "d:a@b     # Write a@b (aka c) to d so now d is 3");
 
