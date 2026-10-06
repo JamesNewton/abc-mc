@@ -65,3 +65,8 @@ y:i@j     # Read array index 2 into y. now y is 42
 a@1:2     # Write 2 to memory address a+1 aka b so now b is 2
 c:3       # now c is 3
 d:a@b     # Write a@b (aka c) to d so now d is 3
+
+# --- STRING POINTER / FUNCTION ---
+a:0
+f:"a+1."  # The CPU should assign the pointer to f and completely skip the inside!
+a=0       # now flag is 1 (Proves function string wasn't executed)

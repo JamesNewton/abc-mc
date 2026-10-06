@@ -143,3 +143,8 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("d", 3, "d:a@b     # Write a@b (aka c) to d so now d is 3");
 
+        // Sync to line: a=0       # now flag is 1 (Proves function string wasn't executed)
+        wait(system_top.cpu.pc == 241 && system_top.cpu.fsm_state == 0);
+        @(posedge clk); // Give memory 1 tick to save
+        assert_flag(1, "a=0       # now flag is 1 (Proves function string wasn't executed)");
+

@@ -19,7 +19,8 @@ module abc_cpu#(
     parameter STATE_MATH       = STATE_EXEC + 1,       //do multi-cycle math
     parameter STATE_STACK_INC  = STATE_MATH + 1,       //increment stack
     parameter STATE_DEREF      = STATE_STACK_INC + 1,  //pointer read delay
-    parameter STATE_MAX        = STATE_DEREF + 1,      //counts of states
+    parameter STATE_STRING     = STATE_DEREF + 1,      //NEW: fast-forward skip
+    parameter STATE_MAX        = STATE_STRING + 1,     //counts of states
     parameter STATE_WIDTH      = $clog2(STATE_MAX)
     )(
     input clk,
@@ -249,8 +250,8 @@ module abc_cpu#(
                         return_state <= STATE_DST; // Reset to expect a new DST
                     end else begin
                         op_sel <= next_char[`OP_AWIDTH-1:0];
-                        return_state <= STATE_SRC;
                         fsm_state <= STATE_FETCH;
+                        return_state <= STATE_SRC;
                     end
                 end
             end
@@ -432,6 +433,11 @@ module abc_cpu#(
                             src_is_literal <= 1;
                             return_state <= STATE_NUM;
                             fsm_state <= STATE_FETCH;
+                        end else if (inst_byte == "\"") begin
+                            literal_num <= pc;   // pc points to the first char inside the string
+                            src_is_literal <= 1; // Treat the address as a literal number
+                            return_state <= STATE_STRING;
+                            fsm_state <= STATE_FETCH;
                         end else begin
                             return_state <= STATE_SRC;
                             fsm_state <= STATE_FETCH;
@@ -482,6 +488,19 @@ begin
                             end
                         end else begin
                             return_state <= STATE_NUM;
+                            fsm_state <= STATE_FETCH;
+                        end
+                    end
+
+                    STATE_STRING: begin
+                        if (inst_byte == "\"") begin
+                            // Closing quote found! The string is completely bypassed.
+                            // Route to WAIT to catch the next operation (like \n or ;)
+                            return_state <= STATE_WAIT;
+                            fsm_state <= STATE_FETCH;
+                        end else begin
+                            // Fast-forward: consume the character and immediately fetch the next one
+                            return_state <= STATE_STRING;
                             fsm_state <= STATE_FETCH;
                         end
                     end

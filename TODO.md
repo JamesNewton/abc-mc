@@ -62,13 +62,10 @@ a<3~
 - **Test Case**: Send `a@1:2\nc:3\nc:a@b`. (Write 2 to memory address a+1 aka b, set c to 3, write a@b (aka c) to d).
 - **Assertion**: `assert_register("b", 2); assert_register("d", 3);`.
 
-**Quote Strings to Memory**
-- **Plan**: 
-
-**Hardware Call Stack (s)**
-- **Plan**: Wire the parameter setup `(`, and call operator `)` to increment/decrement the `s` register and push/pop data to the LIFO.  
-- **Test Case**: Send `(5,6)`
-- **Assertion**: Assert the internal hardware stack has a depth of 2, and the top element is 6.
+**Hardware Call Stack & Subroutines (`(`, `)`, `.`)**
+- **Plan**: Wire `(` to prepare the FSM for arguments. Wire `)` to push the final argument to the stack, push the current `pc` (return address), and overwrite the `pc` with the target address stored in the destination register. Wire `.` to pop the return address from the BRAM stack back into the `pc`, returning execution to the caller.
+- **Test Case**: Jump over a subroutine to the main code. Assign the subroutine's physical memory address to a register (e.g., `f`). Call `f(5)`. Inside the subroutine, perform math, save the result to a global variable, and return `.`.
+- **Assertion**: Assert the global variable contains the correct math result, and assert the stack pointer `s` has perfectly returned to 0 (proving a clean frame cleanup).
 
 ## Phase 3: System-on-Chip (SoC) Peripherals
 Wiring the CPU to the physical world using the crossbar switch.
@@ -85,3 +82,10 @@ Wiring the CPU to the physical world using the crossbar switch.
  (or equivalent compiled byte sequence).
  - **Assertion**: `assert_register("a", 127)` (midpoint of an 8-bit value).
  
+ ## Future Explorations: Boot & Initialization
+**SPI Flash Bootloader**
+- **Plan**: Expand the FSM with a `STATE_BOOT` sequence that runs on power-up. Configure an SPI peripheral to read a raw text file from an external Flash chip (standard on iCE40 boards) and stream it directly into the Instruction BRAM before transitioning to `STATE_FETCH`.
+
+**Bootloader Label Back-filling (`$`)**
+- **Plan**: Implement a dynamic hardware linker operator (`$`). E.g., `f:000 ... f$a:a+1.` 
+- **Mechanic**: When the FSM encounters `$`, it halts execution, scans the BRAM for the matching destination pattern (e.g., `f:000`), overwrites those zeros with the current `pc` address, and then resumes normal execution.
