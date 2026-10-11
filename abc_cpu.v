@@ -65,6 +65,7 @@ module abc_cpu#(
     reg [7:0] op_count;
     reg [7:0] pending_char;
     reg in_comment;
+    reg cmp_flag;
 
     // --- THE REGISTER FILE ---
     reg [31:0] registers [0:25]; 
@@ -101,6 +102,9 @@ module abc_cpu#(
             "^": alu_result = alu_operand_a ^ alu_operand_b;
             "*": alu_result = alu_operand_a * alu_operand_b;
             "/": alu_result = alu_operand_a / alu_operand_b;
+            "<": alu_result = (alu_operand_a < alu_operand_b) ? 32'd1 : 32'd0;
+            ">": alu_result = (alu_operand_a > alu_operand_b) ? 32'd1 : 32'd0;
+            "=": alu_result = (alu_operand_a == alu_operand_b) ? 32'd1 : 32'd0;
             default: alu_result = alu_operand_a; 
         endcase
     end
@@ -116,6 +120,7 @@ module abc_cpu#(
             num <= 0;
             op_count <= 0;
             in_comment <= 0;
+            cmp_flag <= 0;
             
             registers["r" - 8'd97] <= 32'd10; // Default radix
         end else begin
@@ -180,7 +185,11 @@ module abc_cpu#(
             // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
                 if (op_count > 0) begin
-                    registers[dest] <= alu_result;
+                    if (op == "<" || op == ">" || op == "=") begin
+                        cmp_flag <= alu_result[0];
+                    end else begin
+                        registers[dest] <= alu_result;
+                    end
                     op_count <= op_count - 1;
                 end else begin
                     // CLEANUP & ROUTE PENDING CHAR
@@ -188,7 +197,7 @@ module abc_cpu#(
                         dest_type <= TYPE_NONE;
                         op <= 0;
                     end 
-                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/") begin
+                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=") begin
                         op <= pending_char;
                     end 
                     else begin

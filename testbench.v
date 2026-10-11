@@ -57,9 +57,20 @@ module testbench();
     end
     endtask
 
-task assert_flag(input expected, input [1023:0] line_text);
+    task assert_flag(input expected, input [1023:0] line_text);
+        reg actual_val;
     begin
-        #0; // Dummy statement to satisfy the compiler
+        // Wait 1 extra clock cycle for the execution state to save to the flag
+        @(posedge clk); 
+        
+        actual_val = system_top.cpu.cmp_flag;
+        
+        if (actual_val !== expected) begin
+            $display("[FAIL] Flag: Expected %d, but got %d in the line:\n %0s", expected, actual_val, line_text);
+            $finish;
+        end else begin
+            $display("[PASS] Flag evaluated to: %s", expected ? "True" : "False");
+        end
     end
     endtask
 
