@@ -1,69 +1,92 @@
 `ifndef ABC_CPU_V
 `define ABC_CPU_V
 
-module abc_cpu (
+`include "abc_define.vh"
+`include "bram.v"
+
+// --- CPU MODULE ---
+module abc_cpu#(
+    parameter STATE_FETCH      = 0,
+    parameter STATE_FETCH_WAIT = 1,
+    parameter STATE_EXEC       = 2,
+    parameter STATE_WIDTH      = 2
+)(
     input clk,
     input reset,
     
-    // The incoming instruction stream
-    input [7:0] next_inst,
-    input inst_valid,
-    output reg fetch_next, // Tells the memory/stream to advance
+    // Legacy Ports
+    input [`RX_WIDTH-1:0] rx_byte,
+    input rx_ready,
+    output reg [STATE_WIDTH-1:0] state,
+
+    output reg [`REG_AWIDTH-1:0] dst_sel,
+    output reg [`OP_AWIDTH-1:0] op_sel,
+    output reg [`REG_AWIDTH-1:0] src_sel,
+    output reg [`REG_DWIDTH-1:0] literal_num,
+    output reg src_is_literal,
+    input [`REG_DWIDTH-1:0] reg_data_a,
+    input [`REG_DWIDTH-1:0] reg_data_b,
+    output reg reg_write_en,
+    output reg [`REG_DWIDTH-1:0] reg_write_data,
     
-    output reg [7:0] debug_state
+    output reg [7:0] debug
 );
 
-    // --- TYPES & STATES ---
+    // --- INTERNAL REGISTERS ---
+    reg [STATE_WIDTH-1:0] fsm_state;
+    reg [11:0] pc;
+    wire [7:0] inst_byte;
+
+    // --- INSTRUCTION MEMORY (BRAM) ---
+    bram #(
+        .DATA_WIDTH(8),
+        .ADDR_WIDTH(12)
+    ) imem (
+        .clk(clk),
+        .write_en(1'b0),
+        .write_addr(12'd0),
+        .write_data(8'd0),
+        .read_addr(pc),
+        .read_data(inst_byte)
+    );
+
+    // --- STREAM PIPELINE REGISTERS ---
     localparam TYPE_NONE = 2'd0;
     localparam TYPE_REG  = 2'd1;
     localparam TYPE_NUM  = 2'd2;
-    // TYPE_FUNC can be added here later
 
-    localparam STATE_LOAD = 1'b0;
-    localparam STATE_EXEC = 1'b1;
-
-    reg fsm_state;
-
-    // --- THE PIPELINE REGISTERS ---
     reg [4:0] dest;
     reg [1:0] dest_type;
-    
     reg [7:0] op;
-    
     reg [4:0] source;
-    reg [31:0] num;       // 32-bit integers as specified in the README
+    reg [31:0] num;
     reg [1:0] source_type;
     
     reg [7:0] op_count;
-    reg [7:0] pending_char; // Holds the character that triggered execution
+    reg [7:0] pending_char;
+    reg in_comment;
 
     // --- THE REGISTER FILE ---
-    // 26 wide registers mapped directly to the alphabet
-    reg [31:0] registers [0:25];
-
-    // Hardware shortcuts to specific registers
+    reg [31:0] registers [0:25]; 
     wire [31:0] radix = registers["r" - 8'd97];
-    
+
     // --- THE DYNAMIC LEXER ---
-    // Evaluates the incoming next_inst byte combinationally
-    wire is_alpha = (next_inst >= "a" && next_inst <= "z");
-    wire is_digit = (next_inst >= "0" && next_inst <= "9");
-    wire is_hex   = (radix == 16) && (next_inst >= "a" && next_inst <= "f");
+    wire is_alpha = (inst_byte >= "a" && inst_byte <= "z");
+    wire is_digit = (inst_byte >= "0" && inst_byte <= "9");
+    wire is_hex   = (radix == 16) && (inst_byte >= "a" && inst_byte <= "f");
     
-    // We only treat a-f as numbers if we already have a destination!
     wire is_num = is_digit || (is_hex && dest_type != TYPE_NONE && op != 0);
     wire is_reg = is_alpha && !is_num;
     
-    wire is_eol = (next_inst == "\n" || next_inst == ";" || next_inst == 8'd0);
-    wire is_space = (next_inst == " " || next_inst == "\t");
-    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space);
+    wire is_eol = (inst_byte == "\n" || inst_byte == ";" || inst_byte == 8'd0);
+    wire is_space = (inst_byte == " " || inst_byte == "\t");
+    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space && inst_byte != "#");
 
-    wire [31:0] digit_val = (next_inst >= "0" && next_inst <= "9") ? 
-                            (next_inst - 8'd48) : 
-                            (next_inst - 8'd87); // 'a' is 97, 97-87 = 10
+    wire [31:0] digit_val = (inst_byte >= "0" && inst_byte <= "9") ? 
+                            (inst_byte - 8'd48) : 
+                            (inst_byte - 8'd87);
 
     // --- THE ALU ---
-    // MUX for Side B: seamlessly routes either the decoded Source Register or the raw num accumulator
     wire [31:0] alu_operand_a = registers[dest];
     wire [31:0] alu_operand_b = (source_type == TYPE_NUM) ? num : registers[source];
     reg  [31:0] alu_result;
@@ -73,6 +96,11 @@ module abc_cpu (
             ":": alu_result = alu_operand_b;
             "+": alu_result = alu_operand_a + alu_operand_b;
             "-": alu_result = alu_operand_a - alu_operand_b;
+            "&": alu_result = alu_operand_a & alu_operand_b;
+            "|": alu_result = alu_operand_a | alu_operand_b;
+            "^": alu_result = alu_operand_a ^ alu_operand_b;
+            "*": alu_result = alu_operand_a * alu_operand_b;
+            "/": alu_result = alu_operand_a / alu_operand_b;
             default: alu_result = alu_operand_a; 
         endcase
     end
@@ -80,92 +108,107 @@ module abc_cpu (
     // --- THE PIPELINE FSM ---
     always @(posedge clk) begin
         if (reset) begin
-            fsm_state <= STATE_LOAD;
-            fetch_next <= 1;
+            fsm_state <= STATE_FETCH;
+            pc <= 0;
             dest_type <= TYPE_NONE;
             source_type <= TYPE_NONE;
             op <= 0;
             num <= 0;
             op_count <= 0;
+            in_comment <= 0;
             
-            // Initialize Radix to 10
-            registers["r" - 8'd97] <= 32'd10;
+            registers["r" - 8'd97] <= 32'd10; // Default radix
         end else begin
             
-            if (fsm_state == STATE_LOAD && inst_valid) begin
-                if (is_space) begin
-                    fetch_next <= 1; // Ignore and fetch next
+            if (fsm_state == STATE_FETCH) begin
+                fsm_state <= STATE_FETCH_WAIT;
+            end 
+            
+            else if (fsm_state == STATE_FETCH_WAIT) begin
+                pc <= pc + 1; // Default advance PC
+
+                if (in_comment) begin
+                    if (is_eol) in_comment <= 0;
+                    fsm_state <= STATE_FETCH;
+                end 
+                else if (inst_byte == "#") begin
+                    in_comment <= 1;
+                    fsm_state <= STATE_FETCH;
+                end 
+                else if (is_space) begin
+                    fsm_state <= STATE_FETCH;
                 end 
                 // 1. DESTINATION ROUTING
                 else if (dest_type == TYPE_NONE) begin
                     if (is_reg) begin
-                        dest <= next_inst - 8'd97;
+                        dest <= inst_byte - 8'd97;
                         dest_type <= TYPE_REG;
                     end
-                    fetch_next <= 1;
+                    fsm_state <= STATE_FETCH;
                 end 
                 // 2. OPERATION ROUTING
                 else if (op == 0) begin
-                    if (is_op) begin
-                        op <= next_inst;
-                    end
-                    fetch_next <= 1;
+                    if (is_op) op <= inst_byte;
+                    fsm_state <= STATE_FETCH;
                 end 
-                // 3. SOURCE ROUTING & EXECUTION TRIGGER
+                // 3. SOURCE ROUTING
                 else begin
-                    // If a new character matches an OP or EOL, we trigger execution!
-                    if (source_type != TYPE_NONE && (is_op || is_eol)) begin
-                        pending_char <= next_inst;
-                        op_count <= 1;            
-                        fetch_next <= 0;          // Stall the pipeline!
-                        fsm_state <= STATE_EXEC;  // Switch to execution mode
-                    end 
-                    // Accumulate Number
-                    else if (is_num) begin
+                    if (is_num && (source_type == TYPE_NONE || source_type == TYPE_NUM)) begin
                         num <= (num * radix) + digit_val; 
                         source_type <= TYPE_NUM;
-                        fetch_next <= 1;
+                        fsm_state <= STATE_FETCH;
                     end 
-                    // Assign Source Register
-                    else if (is_reg) begin
-                        source <= next_inst - 8'd97;
+                    else if (is_reg && source_type == TYPE_NONE) begin
+                        source <= inst_byte - 8'd97;
                         source_type <= TYPE_REG;
-                        fetch_next <= 1;
+                        fsm_state <= STATE_FETCH;
+                    end 
+                    // 4. STREAM TRIGGER
+                    else begin
+                        pending_char <= inst_byte;
+                        op_count <= 1;            
+                        fsm_state <= STATE_EXEC;  
+                        
+                        // If it's a new destination (e.g. 'f' in f:7f:f+3), rewind PC so we don't lose it!
+                        if (!is_eol && !is_op) begin
+                            pc <= pc; 
+                        end
                     end
                 end
             end 
             
-            // 4. THE EXECUTION STATE
+            // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
                 if (op_count > 0) begin
-                    // Perform the operation and save to the destination register
                     registers[dest] <= alu_result;
                     op_count <= op_count - 1;
                 end else begin
-                    // Cleanup based on what triggered the execution
-                    if (pending_char == "\n" || pending_char == ";") begin
-                        // Newline: clear destination and start over on a new line
+                    // CLEANUP & ROUTE PENDING CHAR
+                    if (pending_char == "\n" || pending_char == ";" || pending_char == 8'd0) begin
                         dest_type <= TYPE_NONE;
                         op <= 0;
-                    end else begin
-                        // Chained operation: replace OP with the pending character
+                    end 
+                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/") begin
                         op <= pending_char;
+                    end 
+                    else begin
+                        dest_type <= TYPE_NONE;
+                        op <= 0;
                     end
                     
-                    // Always clear the source so the next character routes correctly
                     source_type <= TYPE_NONE;
                     num <= 0;
                     
-                    fetch_next <= 1; // Unstall the pipeline
-                    fsm_state <= STATE_LOAD;
+                    // Dropping to FETCH perfectly synchronizes fsm_state == 0 with your assertions!
+                    fsm_state <= STATE_FETCH;
                 end
             end
-            
         end
     end
 
     always @(*) begin
-        debug_state = fsm_state;
+        state = fsm_state;
+        debug = inst_byte;
     end
 
 endmodule
