@@ -71,6 +71,24 @@ module abc_cpu#(
     reg [31:0] registers [0:25]; 
     wire [31:0] radix = registers["r" - 8'd97];
 
+    // --- STACK MEMORY (BRAM) ---
+    wire [31:0] stack_read_data;
+    reg stack_write_en;
+    reg [31:0] stack_write_data;
+    reg [7:0] stack_write_addr;
+
+    bram #(
+        .DATA_WIDTH(32),
+        .ADDR_WIDTH(8)
+    ) stack_mem (
+        .clk(clk),
+        .write_en(stack_write_en),
+        .write_addr(stack_write_addr),
+        .write_data(stack_write_data),
+        .read_addr(registers["s" - 8'd97][7:0] - 8'd1), 
+        .read_data(stack_read_data)
+    );
+
     // --- THE DYNAMIC LEXER ---
     wire is_alpha = (inst_byte >= "a" && inst_byte <= "z");
     wire is_digit = (inst_byte >= "0" && inst_byte <= "9");
@@ -121,6 +139,7 @@ module abc_cpu#(
             op_count <= 0;
             in_comment <= 0;
             cmp_flag <= 0;
+            stack_write_en <= 0;
             
             registers["r" - 8'd97] <= 32'd10; // Default radix
         end else begin
@@ -187,17 +206,24 @@ module abc_cpu#(
                 if (op_count > 0) begin
                     if (op == "<" || op == ">" || op == "=") begin
                         cmp_flag <= alu_result[0];
+                    end else if (op == ",") begin // Push NUM as argument to stack
+                        stack_write_en <= 1;
+                        stack_write_addr <= registers["s" - 8'd97][7:0];
+                        stack_write_data <= alu_operand_b;
+                        registers["s" - 8'd97] <= registers["s" - 8'd97] + 32'd1;
                     end else begin
                         registers[dest] <= alu_result;
                     end
                     op_count <= op_count - 1;
                 end else begin
                     // CLEANUP & ROUTE PENDING CHAR
+                    stack_write_en <= 0; // De-assert stack write pulse
+
                     if (pending_char == "\n" || pending_char == ";" || pending_char == 8'd0) begin
                         dest_type <= TYPE_NONE;
                         op <= 0;
                     end 
-                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=") begin
+                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=" || pending_char == ",") begin
                         op <= pending_char;
                     end 
                     else begin

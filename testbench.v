@@ -81,8 +81,19 @@ module testbench();
     endtask
 
     task assert_stack(input [7:0] addr, input [31:0] expected, input [1023:0] line_text);
+        reg [31:0] actual_val;
     begin
-        #0; 
+        // Wait 1 extra clock cycle for the Writeback pulse to finish saving to silicon
+        @(posedge clk); 
+        
+        actual_val = system_top.cpu.stack_mem.memory[addr];
+        
+        if (actual_val !== expected) begin
+            $display("[FAIL] Stack [%d]: Expected %d, but got %d in the line:\n %0s", addr, expected, actual_val, line_text);
+            $finish;
+        end else begin
+            $display("[PASS] Stack [%d] stored: %d", addr, expected);
+        end
     end
     endtask
 
