@@ -69,7 +69,7 @@ module abc_cpu#(
 
     // --- THE REGISTER FILE ---
     reg [31:0] registers [0:25]; 
-    wire [31:0] radix = registers["r" - 8'd97];
+    wire [31:0] radix = registers["r" - `REG_START];
 
     // --- STACK MEMORY (BRAM) ---
     wire [31:0] stack_read_data;
@@ -85,7 +85,7 @@ module abc_cpu#(
         .write_en(stack_write_en),
         .write_addr(stack_write_addr),
         .write_data(stack_write_data),
-        .read_addr(registers["s" - 8'd97][7:0] - 8'd1), 
+        .read_addr(registers["s" - `REG_START][7:0] - 8'd1), 
         .read_data(stack_read_data)
     );
 
@@ -141,7 +141,7 @@ module abc_cpu#(
             cmp_flag <= 0;
             stack_write_en <= 0;
             
-            registers["r" - 8'd97] <= 32'd10; // Default radix
+            registers["r" - `REG_START] <= 32'd10; // Default radix
         end else begin
             
             if (fsm_state == STATE_FETCH) begin
@@ -162,20 +162,29 @@ module abc_cpu#(
                 else if (is_space) begin
                     fsm_state <= STATE_FETCH;
                 end 
-                // 1. DESTINATION ROUTING
+                // DESTINATION ROUTING
                 else if (dest_type == TYPE_NONE) begin
                     if (is_reg) begin
-                        dest <= inst_byte - 8'd97;
+                        dest <= inst_byte - `REG_START;
                         dest_type <= TYPE_REG;
+                        fsm_state <= STATE_FETCH;
+                    end 
+                    else if (is_op) begin
+                        // STANDALONE OPERATORS (like [, ], and .)
+                        op <= inst_byte;
+                        op_count <= 1;            
+                        fsm_state <= STATE_EXEC;  
                     end
-                    fsm_state <= STATE_FETCH;
-                end 
-                // 2. OPERATION ROUTING
+                    else begin
+                        fsm_state <= STATE_FETCH;
+                    end
+                end
+                // OPERATION ROUTING
                 else if (op == 0) begin
                     if (is_op) op <= inst_byte;
                     fsm_state <= STATE_FETCH;
                 end 
-                // 3. SOURCE ROUTING
+                // SOURCE ROUTING
                 else begin
                     if (is_num && (source_type == TYPE_NONE || source_type == TYPE_NUM)) begin
                         num <= (num * radix) + digit_val; 
@@ -183,7 +192,7 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end 
                     else if (is_reg && source_type == TYPE_NONE) begin
-                        source <= inst_byte - 8'd97;
+                        source <= inst_byte - `REG_START;
                         source_type <= TYPE_REG;
                         fsm_state <= STATE_FETCH;
                     end 
@@ -208,9 +217,22 @@ module abc_cpu#(
                         cmp_flag <= alu_result[0];
                     end else if (op == ",") begin // Push NUM as argument to stack
                         stack_write_en <= 1;
-                        stack_write_addr <= registers["s" - 8'd97][7:0];
+                        stack_write_addr <= registers["s" - `REG_START][7:0];
                         stack_write_data <= alu_operand_b;
-                        registers["s" - 8'd97] <= registers["s" - 8'd97] + 32'd1;
+                        registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                    end else if (op == "[") begin 
+                        // Start loop: push current PC to stack
+                        stack_write_en <= 1;
+                        stack_write_addr <= registers["s" - `REG_START][7:0];
+                        stack_write_data <= {20'd0, pc}; // Save PC
+                        registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                    end else if (op == "]") begin 
+                        // End loop: jump or pop
+                        if (cmp_flag) begin
+                            pc <= stack_read_data[11:0]; // Jump back to loop start
+                        end else begin
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; // Pop stack
+                        end
                     end else begin
                         registers[dest] <= alu_result;
                     end

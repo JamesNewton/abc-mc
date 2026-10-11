@@ -89,10 +89,10 @@ module testbench();
         actual_val = system_top.cpu.stack_mem.memory[addr];
         
         if (actual_val !== expected) begin
-            $display("[FAIL] Stack [%d]: Expected %d, but got %d in the line:\n %0s", addr, expected, actual_val, line_text);
+            $display("[FAIL] Stack [%d ]: Expected %d, but got %d in the line:\n %0s", addr, expected, actual_val, line_text);
             $finish;
         end else begin
-            $display("[PASS] Stack [%d] stored: %d", addr, expected);
+            $display("[PASS] Stack [%d ] stored: %d", addr, expected);
         end
     end
     endtask
