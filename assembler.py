@@ -31,7 +31,7 @@ def build_toolchain(input_file, hex_file, assert_file, memory_size=256):
                 
                 # Write the synchronization locks into the testbench
                 assert_lines.append(f'        // Sync to line: {original_line}')
-                assert_lines.append(f'        wait(system_top.cpu.pc == {pc_counter} && system_top.cpu.fsm_state == 0);')
+                assert_lines.append(f'        wait(system_top.program_counter == {pc_counter} && system_top.cpu.fsm_state == 0);')
                 assert_lines.append(f'        @(posedge clk); // Give memory 1 tick to save')
 
                 # Route to the correct Verilog task

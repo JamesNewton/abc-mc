@@ -1,562 +1,172 @@
 `ifndef ABC_CPU_V
 `define ABC_CPU_V
 
-`include "abc_define.vh"
-`include "alu_math.v"
-`include "bram.v"
-
-// --- CPU MODULE ---
-module abc_cpu#(
-    // Defining parameters here allows the ports to use them.
-    parameter STATE_FETCH      = 0,                    //instruction fetch
-    parameter STATE_FETCH_WAIT = STATE_FETCH + 1,
-    parameter STATE_DST        = STATE_FETCH_WAIT + 1, //set the destination
-    parameter STATE_OP         = STATE_DST + 1,        //set the operation
-    parameter STATE_SRC        = STATE_OP + 1,         //set the source
-    parameter STATE_NUM        = STATE_SRC + 1,        //accumulate a digit
-    parameter STATE_WAIT       = STATE_NUM + 1,        //
-    parameter STATE_EXEC       = STATE_WAIT + 1,       //execute dst, op, src
-    parameter STATE_MATH       = STATE_EXEC + 1,       //do multi-cycle math
-    parameter STATE_STACK_INC  = STATE_MATH + 1,       //increment stack
-    parameter STATE_DEREF      = STATE_STACK_INC + 1,  //pointer read delay
-    parameter STATE_STRING     = STATE_DEREF + 1,      //NEW: fast-forward skip
-    parameter STATE_MAX        = STATE_STRING + 1,     //counts of states
-    parameter STATE_WIDTH      = $clog2(STATE_MAX)
-    )(
+module abc_cpu (
     input clk,
     input reset,
-    input [`RX_WIDTH-1:0] rx_byte,
-    input rx_ready,
-    output reg [STATE_WIDTH-1:0] state, 
-    //heart of the cpu. Directs inst bytes to:
-    // 0. Destination select (dst_sel)
-    // 1. Operation select (op_sel)
-    // 2. Source select (src_sel)
-    // and then back to op_sel until the op is carriage return.
     
-    output reg [`REG_AWIDTH-1:0] dst_sel, //where the result will go 
-    output reg [`OP_AWIDTH-1:0] op_sel,  //the operation to perform
-    output reg [`REG_AWIDTH-1:0] src_sel, //the data source
+    // The incoming instruction stream
+    input [7:0] next_inst,
+    input inst_valid,
+    output reg fetch_next, // Tells the memory/stream to advance
     
-    // Literal number tracking
-    output reg [`REG_DWIDTH-1:0] literal_num,
-    output reg src_is_literal, 
-    // Memory Bus Interface
-    input [`REG_DWIDTH-1:0] reg_data_a,     // Data read from Dest register
-    input [`REG_DWIDTH-1:0] reg_data_b,     // Data read from Source register
-    output reg reg_write_en,                // Trigger to save data
-    output reg [`REG_DWIDTH-1:0] reg_write_data, // The data to save
-    output reg [7:0] debug
+    output reg [7:0] debug_state
 );
-    localparam [`REG_AWIDTH-1:0] REG_R_ADDR = "r" - `ASCII_OFFSET;
 
-    reg [STATE_WIDTH-1:0] fsm_state;
-    reg [`INST_WIDTH-1:0] next_char;
-    reg [STATE_WIDTH-1:0] return_state;
-    reg [`REG_AWIDTH-1:0] cpu_radix;
-    reg cmp_flag; // condition flag
-    reg skip_flag; // line-skip firewall
-    reg [`REG_AWIDTH-1:0] active_sub_addr; // Holds the base pointer
-    reg has_sub_addr;                      // Triggers the dereference detour
+    // --- TYPES & STATES ---
+    localparam TYPE_NONE = 2'd0;
+    localparam TYPE_REG  = 2'd1;
+    localparam TYPE_NUM  = 2'd2;
+    // TYPE_FUNC can be added here later
+
+    localparam STATE_LOAD = 1'b0;
+    localparam STATE_EXEC = 1'b1;
+
+    reg fsm_state;
+
+    // --- THE PIPELINE REGISTERS ---
+    reg [4:0] dest;
+    reg [1:0] dest_type;
+    
+    reg [7:0] op;
+    
+    reg [4:0] source;
+    reg [31:0] num;       // 32-bit integers as specified in the README
+    reg [1:0] source_type;
+    
+    reg [7:0] op_count;
+    reg [7:0] pending_char; // Holds the character that triggered execution
+
+    // --- THE REGISTER FILE ---
+    // 26 wide registers mapped directly to the alphabet
+    reg [31:0] registers [0:25];
+
+    // Hardware shortcuts to specific registers
+    wire [31:0] radix = registers["r" - 8'd97];
+    
     // --- THE DYNAMIC LEXER ---
-    wire is_hex_char = (inst_byte >= "a" && inst_byte <= "f");
-    // Only treat a-f as numbers if we are actively expecting a Source or building a Number
-    wire parse_as_hex = (cpu_radix == 16) && (fsm_state == STATE_SRC || fsm_state == STATE_NUM);
-
-    // --- INSTRUCTION MEMORY (BRAM) ---
-    reg [`IMEM_AWIDTH-1:0] pc;
-    wire [`INST_WIDTH-1:0] inst_byte; // The ASCII character fetched from memory
-
-    bram #(
-        .DATA_WIDTH(8), // ASCII characters are 8 bits
-        .ADDR_WIDTH(`IMEM_AWIDTH)
-    ) imem (
-        .clk(clk),
-        
-        // Write Port (Disabled for now)
-        .write_en(1'b0),
-        .write_addr(8'd0),
-        .write_data(8'd0),
-        
-        // Read Port
-        .read_addr(pc),
-        .read_data(inst_byte)
-    );
-
-    wire is_cmp_op = (op_sel == "<" || op_sel == ">" || op_sel == "=");
-
-    // --- STACK MEMORY (BRAM) ---
-    wire [7:0] stack_read_data;
-    reg stack_write_en;
-    reg [7:0] stack_write_data;
-
-    bram #(
-        .DATA_WIDTH(`STACK_DWIDTH), 
-        .ADDR_WIDTH(`STACK_AWIDTH)
-    ) stack_mem (
-        .clk(clk),
-        .write_en(stack_write_en),
-        
-        // The Stack Pointer (s) is always the memory address!
-        .write_addr(system_top.regs.memory[`REG_S_STACK]), 
-        // Continuously output the TOP of the stack (s - 1)
-        .read_addr(system_top.regs.memory[`REG_S_STACK] - 8'd1),
-        // route the s register data out of the Register File 
-        // to feed the Stack's address ports        
-        .write_data(stack_write_data),
-        .read_data(stack_read_data)
-    );
-
-    // --- MATH ROUTING ---
-    // Dynamically checks if the current operator requires the multi-cycle engine
-    wire is_multi_cycle_op = 1'b0
-`ifdef MAKE_MUL
-        || (op_sel == "*")
-`endif
-`ifdef MAKE_DIV
-        || (op_sel == "/")
-`endif
-    ;
-
-    // --- THE LEXER ---
-    // Instantly evaluates the input byte type; 0 clock cycles
-    wire is_num = (inst_byte >= "0" && inst_byte <= "9") || (parse_as_hex && is_hex_char);
-    wire is_reg = (inst_byte >= "a" && inst_byte <= "z") && !is_num;
-    wire is_eol = (inst_byte == `ASCII_LF || inst_byte == `ASCII_CR || inst_byte == ";");
-    wire next_is_eol = (next_char == `ASCII_LF || next_char == `ASCII_CR || next_char == ";");
-    wire is_op  = (!is_reg && !is_num && !is_eol); 
-
-    // Extract the numeric value (0-9 or 10-15)
-    wire [`REG_DWIDTH-1:0] digit_val = 
-        (inst_byte >= "0" && inst_byte <= "9") ? 
-        (inst_byte - 8'd48) : 
-        (inst_byte - "a" + 8'd10);
-
-    // --- THE ALU (Arithmetic Logic Unit) ---
+    // Evaluates the incoming next_inst byte combinationally
+    wire is_alpha = (next_inst >= "a" && next_inst <= "z");
+    wire is_digit = (next_inst >= "0" && next_inst <= "9");
+    wire is_hex   = (radix == 16) && (next_inst >= "a" && next_inst <= "f");
     
-    // The Multiplexer (MUX) for Operand B
-    // If the parser flagged a literal, use literal_num. Otherwise, use the source register's data.
-    wire [`REG_DWIDTH-1:0] alu_operand_b = src_is_literal ? literal_num : reg_data_b;
+    // We only treat a-f as numbers if we already have a destination!
+    wire is_num = is_digit || (is_hex && dest_type != TYPE_NONE && op != 0);
+    wire is_reg = is_alpha && !is_num;
     
-    // The Math Result
-    reg [`REG_DWIDTH-1:0] alu_result;
+    wire is_eol = (next_inst == "\n" || next_inst == ";" || next_inst == 8'd0);
+    wire is_space = (next_inst == " " || next_inst == "\t");
+    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space);
 
-    // --- THE MULTI-CYCLE MATH ENGINE ---
-    reg math_start;
-    wire math_done;
-    wire [`REG_DWIDTH-1:0] math_result;
+    wire [31:0] digit_val = (next_inst >= "0" && next_inst <= "9") ? 
+                            (next_inst - 8'd48) : 
+                            (next_inst - 8'd87); // 'a' is 97, 97-87 = 10
 
-`ifdef MULTI_CYCLE_MATH
-    alu_math math_engine (
-        .clk(clk),
-        .reset(reset),
-        .start(math_start),
-        .op(op_sel),
-        .a(reg_data_a),
-        .b(alu_operand_b),
-        .result(math_result),
-        .done(math_done)
-    );
-`endif
+    // --- THE ALU ---
+    // MUX for Side B: seamlessly routes either the decoded Source Register or the raw num accumulator
+    wire [31:0] alu_operand_a = registers[dest];
+    wire [31:0] alu_operand_b = (source_type == TYPE_NUM) ? num : registers[source];
+    reg  [31:0] alu_result;
 
     always @(*) begin
-        case (op_sel)
-            "+": alu_result = reg_data_a + alu_operand_b;
-            "-": alu_result = reg_data_a - alu_operand_b;
-            "&": alu_result = reg_data_a & alu_operand_b;
-            "|": alu_result = reg_data_a | alu_operand_b;
-            "^": alu_result = reg_data_a ^ alu_operand_b; // XOR
-
-`ifdef FAST_MUL
-            // Synthesizes into dedicated DSP slices (or heavy LUT logic). Completes in 0 cycles!
-            "*": alu_result = reg_data_a * alu_operand_b;
-`endif
-            "<": alu_result = (reg_data_a < alu_operand_b) ? 1 : 0;
-            ">": alu_result = (reg_data_a > alu_operand_b) ? 1 : 0;
-            "=": alu_result = (reg_data_a == alu_operand_b) ? 1 : 0;
-            ",": alu_result = reg_data_a + 1; // push NUM to Stack
-            "]": alu_result = reg_data_a - 1; // pop Stack
-            // If no valid operator is set (or for direct assignment), just pass Operand B through
-            default: alu_result = alu_operand_b; 
+        case (op)
+            ":": alu_result = alu_operand_b;
+            "+": alu_result = alu_operand_a + alu_operand_b;
+            "-": alu_result = alu_operand_a - alu_operand_b;
+            default: alu_result = alu_operand_a; 
         endcase
     end
 
-    // --- THE PARSER FSM ---
+    // --- THE PIPELINE FSM ---
     always @(posedge clk) begin
         if (reset) begin
-            fsm_state <= STATE_FETCH; // Boot directly into fetch mode
-            pc <= 0;                  // Start at address 0
-            dst_sel   <= 0;
-            op_sel    <= 0;
-            src_sel   <= 0;
-            literal_num <= 0;
-            src_is_literal <= 0;
-            reg_write_data <= 0;
-            next_char <= 0;
-            return_state <= STATE_DST;
-            reg_write_en <= 0;
-            stack_write_en <= 0;
-            stack_write_data <= 0;
-            cpu_radix <= 10;
-            math_start <= 0;
-            cmp_flag <= 0;
-            skip_flag <= 0;
-            active_sub_addr <= 0;
-            has_sub_addr <= 0;
+            fsm_state <= STATE_LOAD;
+            fetch_next <= 1;
+            dest_type <= TYPE_NONE;
+            source_type <= TYPE_NONE;
+            op <= 0;
+            num <= 0;
+            op_count <= 0;
+            
+            // Initialize Radix to 10
+            registers["r" - 8'd97] <= 32'd10;
         end else begin
             
-            // DEFAULT ASSIGNMENT (1-cycle pulse)
-            reg_write_en <= 0; 
-            // Sniff writes to register 'r' to update the internal radix
-            if (reg_write_en && dst_sel == `REG_R_RADIX) begin
-                cpu_radix <= reg_write_data[7:0];
-            end
-
-            // THE STALL PIPELINE
-            if (fsm_state == STATE_EXEC) begin
-                // The memory write is done (or handled here for state mutators like @ and ,)
-                // EXECUTE THE OPERATION
-                if (op_sel == ",") begin
-                    // Write the value to the Stack Memory
-                    stack_write_en <= 1;
-                    stack_write_data <= alu_operand_b; // Safely writes either a literal or a register
-
-                    // Setup the ALU to increment 's'
-                    dst_sel <= `REG_S_STACK;
-                    src_sel <= `REG_S_STACK;
-                    op_sel <= ","; // Trigger ALU to add 1
-                    
-                    fsm_state <= STATE_STACK_INC; // Divert!
-                end else if (op_sel == "@") begin
-                    // The Pointer Mutator
-                    // Physically shift the destination address, but do NOT pulse the write enable!
-                    dst_sel <= dst_sel + alu_operand_b[`REG_AWIDTH-1:0];
-                end
-                // ROUTE NEXT CHARACTER
-                // (Only route if we didn't divert to the stack increment state)
-                if (op_sel != ",") begin
-                    if (next_is_eol || next_char == ".") begin
-                        fsm_state <= STATE_FETCH;
-                        return_state <= STATE_DST;
-                    // Intercept '?'
-                    end else if (next_char == "?") begin
-                        if (!cmp_flag) skip_flag <= 1; // If false, turn on the skip firewall!
-                        fsm_state <= STATE_FETCH;
-                        return_state <= STATE_DST; // Reset to expect a new DST
-                    // Intercept '!'
-                    end else if (next_char == "!") begin
-                        skip_flag <= 1; // True branch finished naturally, skip the false branch!
-                        fsm_state <= STATE_FETCH;
-                        return_state <= STATE_DST; // Reset to expect a new DST
-                    end else begin
-                        op_sel <= next_char[`OP_AWIDTH-1:0];
-                        fsm_state <= STATE_FETCH;
-                        return_state <= STATE_SRC;
+            if (fsm_state == STATE_LOAD && inst_valid) begin
+                if (is_space) begin
+                    fetch_next <= 1; // Ignore and fetch next
+                end 
+                // 1. DESTINATION ROUTING
+                else if (dest_type == TYPE_NONE) begin
+                    if (is_reg) begin
+                        dest <= next_inst - 8'd97;
+                        dest_type <= TYPE_REG;
+                    end
+                    fetch_next <= 1;
+                end 
+                // 2. OPERATION ROUTING
+                else if (op == 0) begin
+                    if (is_op) begin
+                        op <= next_inst;
+                    end
+                    fetch_next <= 1;
+                end 
+                // 3. SOURCE ROUTING & EXECUTION TRIGGER
+                else begin
+                    // If a new character matches an OP or EOL, we trigger execution!
+                    if (source_type != TYPE_NONE && (is_op || is_eol)) begin
+                        pending_char <= next_inst;
+                        op_count <= 1;            
+                        fetch_next <= 0;          // Stall the pipeline!
+                        fsm_state <= STATE_EXEC;  // Switch to execution mode
+                    end 
+                    // Accumulate Number
+                    else if (is_num) begin
+                        num <= (num * radix) + digit_val; 
+                        source_type <= TYPE_NUM;
+                        fetch_next <= 1;
+                    end 
+                    // Assign Source Register
+                    else if (is_reg) begin
+                        source <= next_inst - 8'd97;
+                        source_type <= TYPE_REG;
+                        fetch_next <= 1;
                     end
                 end
-            end
-
-            // Independent Math Stall State
-            else if (fsm_state == STATE_MATH) begin
-                math_start <= 0; // Drop the start pulse
-                
-`ifdef MULTI_CYCLE_MATH
-                if (math_done) begin
-                    // The 32 cycles are over. Write the math result to memory!
-                    reg_write_en <= 1;
-                    reg_write_data <= math_result;
-                    fsm_state <= STATE_EXEC;
-                end
-`else
-                fsm_state <= STATE_DST; // Failsafe if compiled incorrectly
-`endif
-            end
-
-            // Independent Stack Increment State
-            else if (fsm_state == STATE_STACK_INC) begin
-                stack_write_en <= 0;          // Drop the BRAM write pulse
-                reg_write_en <= 1;            // Fire the register write pulse
-                reg_write_data <= alu_result; // ALU has safely calculated s + 1
-                // ROUTE NEXT CHARACTER
-                if (next_is_eol || next_char == ".") begin
-                    fsm_state <= STATE_FETCH;
-                    return_state <= STATE_DST;
-                end else if (next_char == "?") begin
-                    if (!cmp_flag) skip_flag <= 1;
-                    fsm_state <= STATE_FETCH;
-                    return_state <= STATE_DST;
-                end else if (next_char == "!") begin
-                    skip_flag <= 1;
-                    fsm_state <= STATE_FETCH;
-                    return_state <= STATE_DST;
+            end 
+            
+            // 4. THE EXECUTION STATE
+            else if (fsm_state == STATE_EXEC) begin
+                if (op_count > 0) begin
+                    // Perform the operation and save to the destination register
+                    registers[dest] <= alu_result;
+                    op_count <= op_count - 1;
                 end else begin
-                    op_sel <= next_char[`OP_AWIDTH-1:0];
-                    return_state <= STATE_SRC;
-                    fsm_state <= STATE_FETCH;
-                end
-            end
-            // --- DEREFERENCE DETOUR ---
-            else if (fsm_state == STATE_DEREF) begin
-                // The register file has safely output the new dereferenced data.
-                // Pass the baton back to the execution engine.
-`ifdef MULTI_CYCLE_MATH
-                if (is_multi_cycle_op) begin
-                    math_start <= 1;          
-                    fsm_state <= STATE_MATH;  
-                end else
-`endif
-                begin
-                    if (op_sel == "@" || op_sel == ",") begin
-                        // Handled in STATE_EXEC
-                    end else if (is_cmp_op) begin
-                        cmp_flag <= alu_result[0];
+                    // Cleanup based on what triggered the execution
+                    if (pending_char == "\n" || pending_char == ";") begin
+                        // Newline: clear destination and start over on a new line
+                        dest_type <= TYPE_NONE;
+                        op <= 0;
                     end else begin
-                        reg_write_en <= 1; // Fire the delayed write pulse
-                        reg_write_data <= alu_result;
-                    end
-                    fsm_state <= STATE_EXEC;
-                end
-            end
-
-            // FETCH CYCLE
-            else if (fsm_state == STATE_FETCH) begin
-                // The PC is physically wired to the BRAM's read_addr.
-                // We just wait for the BRAM to clock the data out.
-                fsm_state <= STATE_FETCH_WAIT;
-            end
-            else if (fsm_state == STATE_FETCH_WAIT) begin
-                // instruction_byte is now valid! 
-                // Increment the PC for the next fetch, and move to decode.
-                pc <= pc + 1;
-                if (skip_flag) begin
-                    // If skipping, aggressively throw away bytes until we hit an escape character
-                    if (inst_byte == ".") begin
-                        skip_flag <= 0;
-                        fsm_state <= STATE_DST; // End of block: stop skipping
-                    end else if (inst_byte == "!") begin
-                        skip_flag <= 0;
-                        fsm_state <= STATE_DST; // Hit the 'Else' block: stop skipping!
-                    end else begin
-                        fsm_state <= STATE_FETCH;
-                    end
-                end else if (inst_byte == " " || inst_byte == 8'd9) begin
-                    // GLOBAL WHITESPACE FILTER: Ignore spaces and tabs
-                    fsm_state <= STATE_FETCH;
-                end else begin
-                    // Valid byte: send it to the active pipeline state
-                    fsm_state <= return_state; // Dynamic return
-                end
-            end
-
-            // THE STANDARD PIPELINE
-            else begin
-                case (fsm_state)
-                    STATE_DST: begin
-                        if (is_reg) begin
-                            dst_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                            return_state <= STATE_OP;
-                            fsm_state <= STATE_FETCH; 
-                        end else if (is_num) begin
-                            dst_sel <= 25; // 'z' acts as a harmless bit-bucket
-                            literal_num <= digit_val; 
-                            src_is_literal <= 1;
-                            return_state <= STATE_NUM;
-                            fsm_state <= STATE_FETCH;
-                        // LINE BLOCK CONTROL
-                        end else if (inst_byte == "?") begin
-                            if (!cmp_flag) skip_flag <= 1;
-                            fsm_state <= STATE_FETCH;
-                            return_state <= STATE_DST;
-                        end else if (inst_byte == "!") begin
-                            skip_flag <= 1; // True branch finished naturally, skip the false branch
-                            fsm_state <= STATE_FETCH;
-                            return_state <= STATE_DST;
-                        end else if (inst_byte == ".") begin
-                            fsm_state <= STATE_FETCH; // No-op block terminator
-                            return_state <= STATE_DST;
-                        // START LOOP (Push PC)
-                        end else if (inst_byte == "[") begin
-                            stack_write_en <= 1;
-                            // pc already points to the next char
-                            stack_write_data <= pc;
-                            // Setup ALU to increment 's'
-                            dst_sel <= `REG_S_STACK;
-                            src_sel <= `REG_S_STACK;
-                            op_sel <= ",";
-                            fsm_state <= STATE_STACK_INC;
-                            return_state <= STATE_DST;
-                        // END LOOP (Jump or Pop)
-                        end else if (inst_byte == "]") begin
-                            if (cmp_flag) begin
-                                // JUMP BACK: Overwrite the Program Counter!
-                                pc <= stack_read_data; 
-                                fsm_state <= STATE_FETCH;
-                                return_state <= STATE_DST;
-                            end else begin
-                                // EXIT LOOP: Pop the stack by decrementing 's'
-                                dst_sel <= `REG_S_STACK;
-                                src_sel <= `REG_S_STACK;
-                                op_sel <= "]"; 
-                                
-                                fsm_state <= STATE_STACK_INC;
-                                return_state <= STATE_DST;
-                            end
-                        end else begin
-                            fsm_state <= STATE_FETCH; // Ignore junk, fetch next
-                            return_state <= STATE_DST;
-                        end
-                    end
-
-                    STATE_OP: begin
-                        if (is_eol) begin
-                            return_state <= STATE_DST;
-                            fsm_state <= STATE_FETCH;
-                        end else if (is_op) begin
-                            op_sel <= inst_byte[`OP_AWIDTH-1:0];        
-                            return_state <= STATE_SRC;
-                            fsm_state <= STATE_FETCH;
-                        end else begin
-                            return_state <= STATE_OP;
-                            fsm_state <= STATE_FETCH;
-                        end
+                        // Chained operation: replace OP with the pending character
+                        op <= pending_char;
                     end
                     
-                    STATE_SRC: begin
-                        if (is_reg) begin
-                            src_sel <= inst_byte[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
-                            src_is_literal <= 0;
-                            return_state <= STATE_WAIT; // Instruction full Wait for the next OP.
-                            fsm_state <= STATE_FETCH;
-                        end else if (is_num) begin
-                            // Grab the first digit and switch to NUM mode
-                            literal_num <= digit_val; 
-                            src_is_literal <= 1;
-                            return_state <= STATE_NUM;
-                            fsm_state <= STATE_FETCH;
-                        end else if (inst_byte == "\"") begin
-                            literal_num <= pc;   // pc points to the first char inside the string
-                            src_is_literal <= 1; // Treat the address as a literal number
-                            return_state <= STATE_STRING;
-                            fsm_state <= STATE_FETCH;
-                        end else begin
-                            return_state <= STATE_SRC;
-                            fsm_state <= STATE_FETCH;
-                        end
-                    end
-
-                    STATE_NUM: begin
-                        if (is_num) begin
-                            if (cpu_radix == 16) literal_num <= (literal_num << 4) + digit_val;
-                            else if (cpu_radix == 10) literal_num <= (literal_num << 3) + (literal_num << 1) + digit_val;
-                            else if (cpu_radix == 8) literal_num <= (literal_num << 3) + digit_val;
-                            else if (cpu_radix == 2) literal_num <= (literal_num << 1) + digit_val;
-                            
-                            return_state <= STATE_NUM;
-                            fsm_state <= STATE_FETCH; // Consume digit, fetch next
-                        // INTERCEPT '@' Save base, fetch offset!
-                        end else if (inst_byte == "@") begin
-                            active_sub_addr <= literal_num[`REG_AWIDTH-1:0];
-                            has_sub_addr <= 1;
-                            fsm_state <= STATE_FETCH;
-                            return_state <= STATE_SRC;
-                        end else if (is_op || is_eol) begin
-                            // Trigger execution.
-                            next_char <= inst_byte; // Latch the trigger character
-                            if (has_sub_addr) begin
-                                src_sel <= active_sub_addr + alu_operand_b[`REG_AWIDTH-1:0];
-                                src_is_literal <= 0; 
-                                has_sub_addr <= 0;
-                                fsm_state <= STATE_DEREF; // Detour to read memory!
-                            end else begin
-`ifdef MULTI_CYCLE_MATH
-                                if ( is_multi_cycle_op ) begin
-                                    math_start <= 1;          
-                                    fsm_state <= STATE_MATH;  
-                                end else
-`endif
-begin
-                                    if (op_sel == "@" || op_sel == ",") begin
-                                        // Let STATE_EXEC handle pointer mutations and stack pushes
-                                    end else if (is_cmp_op) begin
-                                        cmp_flag <= alu_result[0]; // Save to flag
-                                    end else begin
-                                        reg_write_en <= 1;         // Save to register
-                                        reg_write_data <= alu_result;
-                                    end
-                                    fsm_state <= STATE_EXEC;
-                                end
-                            end
-                        end else begin
-                            return_state <= STATE_NUM;
-                            fsm_state <= STATE_FETCH;
-                        end
-                    end
-
-                    STATE_STRING: begin
-                        if (inst_byte == "\"") begin
-                            // Closing quote found! The string is completely bypassed.
-                            // Route to WAIT to catch the next operation (like \n or ;)
-                            return_state <= STATE_WAIT;
-                            fsm_state <= STATE_FETCH;
-                        end else begin
-                            // Fast-forward: consume the character and immediately fetch the next one
-                            return_state <= STATE_STRING;
-                            fsm_state <= STATE_FETCH;
-                        end
-                    end
+                    // Always clear the source so the next character routes correctly
+                    source_type <= TYPE_NONE;
+                    num <= 0;
                     
-                    STATE_WAIT: begin
-                        // OUT OF TURN INTERCEPTION: Save base, fetch offset!
-                        if (inst_byte == "@") begin
-                            active_sub_addr <= src_sel;
-                            has_sub_addr <= 1;
-                            fsm_state <= STATE_FETCH;
-                            return_state <= STATE_SRC;
-                        end else if (is_op || is_eol) begin
-                            // Trigger execution.
-                            next_char <= inst_byte;
-                            if (has_sub_addr) begin
-                                src_sel <= active_sub_addr + alu_operand_b[`REG_AWIDTH-1:0];
-                                src_is_literal <= 0; 
-                                has_sub_addr <= 0;
-                                fsm_state <= STATE_DEREF; // Detour to read memory
-                            end else begin
-`ifdef MULTI_CYCLE_MATH
-                                if (is_multi_cycle_op) begin
-                                    math_start <= 1;          
-                                    fsm_state <= STATE_MATH;  
-                                end else
-`endif
-                                begin
-                                    if (op_sel == "@" || op_sel == ",") begin
-                                    // Let STATE_EXEC handle pointer mutations and stack pushes
-                                    end else if (is_cmp_op) begin
-                                        cmp_flag <= alu_result[0]; // Save to flag
-                                    end else begin
-                                        reg_write_en <= 1;         // Save to register
-                                        reg_write_data <= alu_result;
-                                    end
-                                    fsm_state <= STATE_EXEC;
-                                end
-                            end
-                        end else begin
-                            return_state <= STATE_WAIT;
-                            fsm_state <= STATE_FETCH;
-                        end
-                    end
-
-                    default: begin
-                        has_sub_addr <= 0; // Failsafe clearing
-                        fsm_state <= STATE_DST;
-                    end
-                endcase //fsm_state
-            end //end standard pipeline
-        end //not resetting
-    end //PARSER FSM
+                    fetch_next <= 1; // Unstall the pipeline
+                    fsm_state <= STATE_LOAD;
+                end
+            end
+            
+        end
+    end
 
     always @(*) begin
-        state = fsm_state;
-        debug = inst_byte;
+        debug_state = fsm_state;
     end
+
 endmodule
-`endif // ABC_CPU_V
+`endif
