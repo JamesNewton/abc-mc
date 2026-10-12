@@ -64,8 +64,12 @@ module abc_cpu#(
     
     reg [7:0] op_count;
     reg [7:0] pending_char;
+    
+    // Control & Context Trackers
     reg in_comment;
     reg cmp_flag;
+    reg [3:0] exec_depth;
+    reg [3:0] skip_depth;
 
     // --- THE REGISTER FILE ---
     reg [31:0] registers [0:25]; 
@@ -85,7 +89,7 @@ module abc_cpu#(
         .write_en(stack_write_en),
         .write_addr(stack_write_addr),
         .write_data(stack_write_data),
-        .read_addr(registers["s" - `REG_START][7:0] - 8'd1), 
+        .read_addr(registers["s" - `REG_START][7:0] - 8'd1), // Prep read for top-of-stack
         .read_data(stack_read_data)
     );
 
@@ -99,7 +103,9 @@ module abc_cpu#(
     
     wire is_eol = (inst_byte == "\n" || inst_byte == ";" || inst_byte == 8'd0);
     wire is_space = (inst_byte == " " || inst_byte == "\t");
-    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space && inst_byte != "#");
+    
+    // Standalone Operators exclude logic branches and dots, as they are handled higher up
+    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space && inst_byte != "#" && inst_byte != "?" && inst_byte != "!" && inst_byte != ".");
 
     wire [31:0] digit_val = (inst_byte >= "0" && inst_byte <= "9") ? 
                             (inst_byte - 8'd48) : 
@@ -137,9 +143,14 @@ module abc_cpu#(
             op <= 0;
             num <= 0;
             op_count <= 0;
+            
             in_comment <= 0;
             cmp_flag <= 0;
+            exec_depth <= 0;
+            skip_depth <= 0;
+            
             stack_write_en <= 0;
+            stack_write_addr <= 0;
             
             registers["r" - `REG_START] <= 32'd10; // Default radix
         end else begin
@@ -155,10 +166,52 @@ module abc_cpu#(
                     if (is_eol) in_comment <= 0;
                     fsm_state <= STATE_FETCH;
                 end 
-                else if (inst_byte == "#") begin
+                
+                // --- CONDITIONAL LOGIC ---
+                // Control chars MUST force pending instructions to execute first.
+                // We only process them if we are skipping, or if the pipeline is empty.
+                else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "#") begin
                     in_comment <= 1;
                     fsm_state <= STATE_FETCH;
                 end 
+                else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "?") begin
+                    if (skip_depth == 0) begin
+                        if (cmp_flag) exec_depth <= exec_depth + 1;
+                        else skip_depth <= 1;
+                    end else begin
+                        skip_depth <= skip_depth + 1;
+                    end
+                    fsm_state <= STATE_FETCH;
+                end
+                else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "!") begin
+                    if (skip_depth == 1) begin
+                        skip_depth <= 0;
+                        exec_depth <= exec_depth + 1;
+                    end else if (skip_depth == 0 && exec_depth > 0) begin
+                        exec_depth <= exec_depth - 1;
+                        skip_depth <= 1;
+                    end
+                    fsm_state <= STATE_FETCH;
+                end
+                else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == ".") begin
+                    if (skip_depth > 0) begin
+                        skip_depth <= skip_depth - 1;
+                        fsm_state <= STATE_FETCH;
+                    end else if (exec_depth > 0) begin
+                        exec_depth <= exec_depth - 1;
+                        fsm_state <= STATE_FETCH;
+                    end else begin
+                        // Both are 0: This is a function return! Trigger standalone operator.
+                        op <= inst_byte;
+                        op_count <= 1;            
+                        fsm_state <= STATE_EXEC; 
+                    end
+                end
+                else if (skip_depth > 0) begin
+                    fsm_state <= STATE_FETCH; // Ignore instructions while skipping
+                end
+                // --- END CONDITIONAL LOGIC ---
+                
                 else if (is_space) begin
                     fsm_state <= STATE_FETCH;
                 end 
@@ -170,7 +223,7 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end 
                     else if (is_op) begin
-                        // STANDALONE OPERATORS (like [, ], and .)
+                        // Standalone Operators (like [ and ])
                         op <= inst_byte;
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
@@ -178,7 +231,7 @@ module abc_cpu#(
                     else begin
                         fsm_state <= STATE_FETCH;
                     end
-                end
+                end 
                 // OPERATION ROUTING
                 else if (op == 0) begin
                     if (is_op) op <= inst_byte;
@@ -202,8 +255,12 @@ module abc_cpu#(
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
                         
-                        // If it's a new destination (e.g. 'f' in f:7f:f+3), rewind PC so we don't lose it!
-                        if (!is_eol && !is_op) begin
+                        // Rewind PC if this character is NOT intentionally consumed by the cleanup block!
+                        if (!(is_eol || 
+                              inst_byte == "+" || inst_byte == "-" || inst_byte == "&" || 
+                              inst_byte == "|" || inst_byte == "^" || inst_byte == "*" || 
+                              inst_byte == "/" || inst_byte == "<" || inst_byte == ">" || 
+                              inst_byte == "=" || inst_byte == ",")) begin
                             pc <= pc; 
                         end
                     end
@@ -233,6 +290,10 @@ module abc_cpu#(
                         end else begin
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; // Pop stack
                         end
+                    end else if (op == ".") begin 
+                        // Function Return Pop
+                        pc <= stack_read_data[11:0];
+                        registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
                     end else begin
                         registers[dest] <= alu_result;
                     end

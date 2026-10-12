@@ -51,6 +51,22 @@ a<5?
 b:0
 a>5? b:1; c:1.  # now b is 0 (Because b was never initialized)
                 # now c is 1 (True branch skipped, c remains 1)
+j:0
+i:0
+[
+i<2?
+    i<1? j+1
+    ! j+2
+    .
+!
+    i<3? j+4 
+    ! j+8
+    .
+.
+i+1
+i<4
+]
+j:j # now j is 15
 
 # --- INDEXING ---
 i:0       # Initialize base array
