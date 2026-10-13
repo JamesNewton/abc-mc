@@ -65,6 +65,11 @@ module abc_cpu#(
     reg [7:0] op_count;
     reg [7:0] pending_char;
     
+    // --- SHADOW REGISTERS (For Pointer Indirection) ---
+    reg [4:0] shadow_dest;
+    reg [7:0] shadow_op;
+    reg has_shadow;
+    
     // Control & Context Trackers
     reg in_comment;
     reg cmp_flag;
@@ -143,6 +148,10 @@ module abc_cpu#(
             op <= 0;
             num <= 0;
             op_count <= 0;
+            
+            shadow_dest <= 0;
+            shadow_op <= 0;
+            has_shadow <= 0;
             
             in_comment <= 0;
             cmp_flag <= 0;
@@ -249,18 +258,27 @@ module abc_cpu#(
                         source_type <= TYPE_REG;
                         fsm_state <= STATE_FETCH;
                     end 
+                    // POINTER SHADOW INTERCEPT
+                    else if (inst_byte == "@" && !has_shadow) begin
+                        shadow_dest <= dest;
+                        shadow_op <= op;
+                        has_shadow <= 1;
+                        
+                        dest <= source; // Promote the array variable to the base destination
+                        dest_type <= TYPE_REG;
+                        op <= "@";
+                        source_type <= TYPE_NONE;
+                        num <= 0;
+                        fsm_state <= STATE_FETCH;
+                    end
                     // 4. STREAM TRIGGER
                     else begin
                         pending_char <= inst_byte;
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
-                        
+
                         // Rewind PC if this character is NOT intentionally consumed by the cleanup block!
-                        if (!(is_eol || 
-                              inst_byte == "+" || inst_byte == "-" || inst_byte == "&" || 
-                              inst_byte == "|" || inst_byte == "^" || inst_byte == "*" || 
-                              inst_byte == "/" || inst_byte == "<" || inst_byte == ">" || 
-                              inst_byte == "=" || inst_byte == ",")) begin
+                        if (!(is_eol || inst_byte == "+" || inst_byte == "-" || inst_byte == "&" || inst_byte == "|" || inst_byte == "^" || inst_byte == "*" || inst_byte == "/" || inst_byte == "<" || inst_byte == ">" || inst_byte == "=" || inst_byte == "," || inst_byte == ":" || inst_byte == "@")) begin
                             pc <= pc; 
                         end
                     end
@@ -294,19 +312,39 @@ module abc_cpu#(
                         // Function Return Pop
                         pc <= stack_read_data[11:0];
                         registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                    end else if (op == "@") begin
+                        if (has_shadow) begin
+                            // Evaluate memory, restore the shadow, and trigger the original operation!
+                            num <= registers[dest + alu_operand_b[4:0]];
+                            source_type <= TYPE_NUM;
+                            dest <= shadow_dest;
+                            op <= shadow_op;
+                            has_shadow <= 0;
+                            // Keeping op_count > 0 perfectly syncs the restored operation to the next clock!
+                        end else begin
+                            // Modify destination pointer in-place and quietly fetch the real operation
+                            dest <= dest + alu_operand_b[4:0];
+                            op <= 0;
+                            source_type <= TYPE_NONE;
+                            num <= 0;
+                            op_count <= op_count - 1;
+                        end
                     end else begin
                         registers[dest] <= alu_result;
                     end
-                    op_count <= op_count - 1;
+                    
+                    if (op != "@" || !has_shadow) begin
+                        op_count <= op_count - 1;
+                    end
                 end else begin
                     // CLEANUP & ROUTE PENDING CHAR
                     stack_write_en <= 0; // De-assert stack write pulse
-
+                    
                     if (pending_char == "\n" || pending_char == ";" || pending_char == 8'd0) begin
                         dest_type <= TYPE_NONE;
                         op <= 0;
                     end 
-                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=" || pending_char == ",") begin
+                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=" || pending_char == "," || pending_char == ":" || pending_char == "@") begin
                         op <= pending_char;
                     end 
                     else begin
