@@ -72,6 +72,7 @@ module abc_cpu#(
     
     // Control & Context Trackers
     reg in_comment;
+    reg in_string;
     reg cmp_flag;
     reg [3:0] exec_depth;
     reg [3:0] skip_depth;
@@ -109,8 +110,11 @@ module abc_cpu#(
     wire is_eol = (inst_byte == "\n" || inst_byte == ";" || inst_byte == 8'd0);
     wire is_space = (inst_byte == " " || inst_byte == "\t");
     
-    // Standalone Operators exclude logic branches and dots, as they are handled higher up
-    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space && inst_byte != "#" && inst_byte != "?" && inst_byte != "!" && inst_byte != ".");
+    // Exclude string modifiers and function triggers from operators
+    wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space 
+        && inst_byte != "#" && inst_byte != "?" && inst_byte != "!" && inst_byte != "." 
+        && inst_byte != "@" && inst_byte != "\""
+    );
 
     wire [31:0] digit_val = (inst_byte >= "0" && inst_byte <= "9") ? 
                             (inst_byte - 8'd48) : 
@@ -154,6 +158,7 @@ module abc_cpu#(
             has_shadow <= 0;
             
             in_comment <= 0;
+            in_string <= 0;
             cmp_flag <= 0;
             exec_depth <= 0;
             skip_depth <= 0;
@@ -162,6 +167,7 @@ module abc_cpu#(
             stack_write_addr <= 0;
             
             registers["r" - `REG_START] <= 32'd10; // Default radix
+            registers["s" - `REG_START] <= 32'd0; // Initialize stack pointer
         end else begin
             
             if (fsm_state == STATE_FETCH) begin
@@ -175,7 +181,23 @@ module abc_cpu#(
                     if (is_eol) in_comment <= 0;
                     fsm_state <= STATE_FETCH;
                 end 
-                
+                else if (inst_byte == "(") begin
+                    op <= "(";
+                    op_count <= 2; 
+                    fsm_state <= STATE_EXEC;
+                end
+                else if (in_string) begin
+                    if (inst_byte == "\"") in_string <= 0; 
+                    fsm_state <= STATE_FETCH;
+                end
+                else if (inst_byte == "\"") begin
+                    in_string <= 1; 
+                    if (dest_type != TYPE_NONE && op != 0 && source_type == TYPE_NONE) begin
+                        num <= pc + 1; //Point to the first inside char
+                        source_type <= TYPE_NUM;
+                    end
+                    fsm_state <= STATE_FETCH;
+                end
                 // --- CONDITIONAL LOGIC ---
                 // Control chars MUST force pending instructions to execute first.
                 // We only process them if we are skipping, or if the pipeline is empty.
@@ -212,7 +234,7 @@ module abc_cpu#(
                     end else begin
                         // Both are 0: This is a function return! Trigger standalone operator.
                         op <= inst_byte;
-                        op_count <= 1;            
+                        op_count <= 4; // Currently takes 4 cycles to extract the frame 
                         fsm_state <= STATE_EXEC; 
                     end
                 end
@@ -244,6 +266,10 @@ module abc_cpu#(
                 // OPERATION ROUTING
                 else if (op == 0) begin
                     if (is_op) op <= inst_byte;
+                    else if (inst_byte == "@") begin 
+                        op <= "@";
+                        has_shadow <= 0; 
+                    end
                     fsm_state <= STATE_FETCH;
                 end 
                 // SOURCE ROUTING
@@ -271,7 +297,7 @@ module abc_cpu#(
                         num <= 0;
                         fsm_state <= STATE_FETCH;
                     end
-                    // 4. STREAM TRIGGER
+                    // STREAM TRIGGER
                     else begin
                         pending_char <= inst_byte;
                         op_count <= 1;            
@@ -279,14 +305,17 @@ module abc_cpu#(
 
                         // Rewind PC if this character is NOT intentionally consumed by the cleanup block!
                         if (!(is_eol || inst_byte == "+" || inst_byte == "-" || inst_byte == "&" || inst_byte == "|" || inst_byte == "^" || inst_byte == "*" || inst_byte == "/" || inst_byte == "<" || inst_byte == ">" || inst_byte == "=" || inst_byte == "," || inst_byte == ":" || inst_byte == "@")) begin
-                            pc <= pc; 
+                            pc <= pc - 1; 
                         end
                     end
                 end
             end 
-            
+
             // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
+                // $display("[HW DEBUG] Time: %0t | PC: %d | OP: %c | OpC: %d | S: %d | W_EN: %b | W_ADDR: %d | R_DATA: %x", 
+                //     $time, pc, op, op_count, registers["s" - `REG_START], stack_write_en, stack_write_addr, stack_read_data
+                // );
                 if (op_count > 0) begin
                     if (op == "<" || op == ">" || op == "=") begin
                         cmp_flag <= alu_result[0];
@@ -306,12 +335,35 @@ module abc_cpu#(
                         if (cmp_flag) begin
                             pc <= stack_read_data[11:0]; // Jump back to loop start
                         end else begin
-                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; // Pop stack
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; 
                         end
-                    end else if (op == ".") begin 
-                        // Function Return Pop
-                        pc <= stack_read_data[11:0];
-                        registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                    end else if (op == "(") begin 
+                        stack_write_en <= 1;
+                        stack_write_addr <= registers["s" - `REG_START][7:0];
+                        if (op_count == 2) stack_write_data <= dest; 
+                        else if (op_count == 1) stack_write_data <= {24'd0, shadow_op}; 
+                        registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                        op_count <= op_count - 1;
+                    end else if (op == ")") begin 
+                        stack_write_en <= 1;
+                        stack_write_addr <= registers["s" - `REG_START][7:0];
+                        stack_write_data <= {20'd0, pc}; 
+                        registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                        pc <= registers[dest][11:0]; 
+                        op_count <= op_count - 1;
+                    end else if (op == ".") begin
+                        if (op_count == 4) begin
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                        end else if (op_count == 3) begin
+                            pc <= stack_read_data[11:0];
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                        end else if (op_count == 2) begin
+                            shadow_op <= stack_read_data[7:0];
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                        end else if (op_count == 1) begin
+                            dest <= stack_read_data[4:0];
+                        end
+                        op_count <= op_count - 1;
                     end else if (op == "@") begin
                         if (has_shadow) begin
                             // Evaluate memory, restore the shadow, and trigger the original operation!
@@ -340,11 +392,22 @@ module abc_cpu#(
                     // CLEANUP & ROUTE PENDING CHAR
                     stack_write_en <= 0; // De-assert stack write pulse
                     
-                    if (pending_char == "\n" || pending_char == ";" || pending_char == 8'd0) begin
+                    if (   pending_char == "\n" 
+                        || pending_char == ";" 
+                        || pending_char == 8'd0 
+                        || pending_char == ")" 
+                        || pending_char == "."
+                     ) begin
                         dest_type <= TYPE_NONE;
                         op <= 0;
                     end 
-                    else if (pending_char == "+" || pending_char == "-" || pending_char == "&" || pending_char == "|" || pending_char == "^" || pending_char == "*" || pending_char == "/" || pending_char == "<" || pending_char == ">" || pending_char == "=" || pending_char == "," || pending_char == ":" || pending_char == "@") begin
+                    else if (pending_char == "+" || pending_char == "-" 
+                        || pending_char == "&" || pending_char == "|" || pending_char == "^" 
+                        || pending_char == "*" || pending_char == "/" 
+                        || pending_char == "<" || pending_char == ">" || pending_char == "=" 
+                        || pending_char == "," || pending_char == ":" || pending_char == "@" 
+                        || pending_char == "("
+                        ) begin
                         op <= pending_char;
                     end 
                     else begin
@@ -358,6 +421,20 @@ module abc_cpu#(
                     // Dropping to FETCH perfectly synchronizes fsm_state == 0 with your assertions!
                     fsm_state <= STATE_FETCH;
                 end
+            end
+        end
+    end
+
+    // --- WATCHDOG TIMER ---
+    reg [31:0] watchdog;
+    always @(posedge clk) begin
+        if (reset) begin
+            watchdog <= 0;
+        end else begin
+            watchdog <= watchdog + 1;
+            if (watchdog > 5000) begin 
+                $display("[FATAL] Watchdog timeout reached. Killing simulation.");
+                $finish;
             end
         end
     end
