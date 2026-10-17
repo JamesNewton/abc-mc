@@ -64,6 +64,8 @@ module abc_cpu#(
     
     reg [7:0] op_count;
     reg [7:0] pending_char;
+    reg [4:0] arg_count;
+    reg [4:0] func_ptr; // NEW: Safely anchors the function pointer while parsing arguments!
     
     // --- SHADOW REGISTERS (For Pointer Indirection) ---
     reg [4:0] shadow_dest;
@@ -111,9 +113,10 @@ module abc_cpu#(
     wire is_space = (inst_byte == " " || inst_byte == "\t");
     
     // Exclude string modifiers and function triggers from operators
+    // FIXED: Removed ',' from exclusion so it routes normally and evaluates its source
     wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space 
         && inst_byte != "#" && inst_byte != "?" && inst_byte != "!" && inst_byte != "." 
-        && inst_byte != "@" && inst_byte != "\""
+        && inst_byte != "@" && inst_byte != "\"" && inst_byte != "(" && inst_byte != ")"
     );
 
     wire [31:0] digit_val = (inst_byte >= "0" && inst_byte <= "9") ? 
@@ -165,6 +168,7 @@ module abc_cpu#(
             
             stack_write_en <= 0;
             stack_write_addr <= 0;
+            func_ptr <= 0;
             
             registers["r" - `REG_START] <= 32'd10; // Default radix
             registers["s" - `REG_START] <= 32'd0; // Initialize stack pointer
@@ -183,6 +187,11 @@ module abc_cpu#(
                 end 
                 else if (inst_byte == "(") begin
                     op <= "(";
+                    op_count <= 2; 
+                    fsm_state <= STATE_EXEC;
+                end
+                else if (inst_byte == ")") begin
+                    op <= ")";
                     op_count <= 2; 
                     fsm_state <= STATE_EXEC;
                 end
@@ -319,11 +328,6 @@ module abc_cpu#(
                 if (op_count > 0) begin
                     if (op == "<" || op == ">" || op == "=") begin
                         cmp_flag <= alu_result[0];
-                    end else if (op == ",") begin // Push NUM as argument to stack
-                        stack_write_en <= 1;
-                        stack_write_addr <= registers["s" - `REG_START][7:0];
-                        stack_write_data <= alu_operand_b;
-                        registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                     end else if (op == "[") begin 
                         // Start loop: push current PC to stack
                         stack_write_en <= 1;
@@ -338,30 +342,95 @@ module abc_cpu#(
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; 
                         end
                     end else if (op == "(") begin 
+/* From the C++ version 
+    stack[sp++] = dst.raw;
+    stack[sp++] = src.raw;
+    stack[sp++] = state_flags;
+    stack[sp++] = frame_pointer;      // Save caller's frame
+    stack[sp++] = arg_count;  // Save caller's arg count
+    stack[sp++] = indent.raw;         // Save the caller's indentation state
+    frame_pointer = sp; // New frame starts here
+*/
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
-                        if (op_count == 2) stack_write_data <= dest; 
-                        else if (op_count == 1) stack_write_data <= {24'd0, shadow_op}; 
+                        if (op_count == 2) begin
+                            stack_write_data <= dest; 
+                            func_ptr <= dest; // SAVE the function pointer safely!
+                        end 
+                        else if (op_count == 1) begin
+                            stack_write_data <= {24'd0, shadow_op}; 
+                            arg_count <= 0; // reset argument count
+                        end
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                         op_count <= op_count - 1;
-                    end else if (op == ")") begin 
+                    end else if (op == ",") begin // Push NUM as argument to stack
+                        // stack[sp++] = num;
+                        // FIXED: Reverted back to perfectly pushing alu_operand_b (source)
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
-                        stack_write_data <= {20'd0, pc}; 
+                        stack_write_data <= alu_operand_b; 
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
-                        pc <= registers[dest][11:0]; 
+                        // current_arg_count++; //arg count for variable argument functions
+                        arg_count <= arg_count + 5'd1;
+                    end else if (op == ")") begin 
+/*
+    stack[sp++] = num;
+    current_arg_count++;
+      stack[sp++] = (long)pc_ptr; // Push Return Address to the stack
+      // OFFSET BY -1 because the evaluateABC loop will automatically do pc_ptr++ right after this
+      pc_ptr = &code_ram[func_src.meta.value] - 1; 
+      
+      // Lock in the lexical scope for the new function!
+      scope_frame_pointer = frame_pointer;
+      scope_arg_count = current_arg_count;
+*/
+                        if (op_count == 2) begin
+                            if (dest_type != TYPE_NONE) begin // Only push if there's an actual argument
+                                stack_write_en <= 1;
+                                stack_write_addr <= registers["s" - `REG_START][7:0];
+                                stack_write_data <= (dest_type == TYPE_NUM) ? num : registers[dest]; 
+                                registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                                arg_count <= arg_count + 5'd1; 
+                            end else begin
+                                stack_write_en <= 0; // Empty args like f()
+                            end
+                        end else if (op_count == 1) begin
+                            stack_write_en <= 1;
+                            stack_write_addr <= registers["s" - `REG_START][7:0];
+                            stack_write_data <= {20'd0, pc}; 
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                            pc <= registers[func_ptr][11:0]; // Jump to anchored pointer!
+                        end
                         op_count <= op_count - 1;
                     end else if (op == ".") begin
-                        if (op_count == 4) begin
-                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+/*
+  pc_ptr = (const char*)stack[--sp]; // Pop Return Address
+  sp = frame_pointer;   // Restore previous frame
+  indent.raw        = stack[frame_pointer - FRAME_OFFSET_INDENT];
+  current_arg_count = stack[frame_pointer - FRAME_OFFSET_ARGC];
+  long old_fp       = stack[frame_pointer - FRAME_OFFSET_FP];
+  long state_flags  = stack[frame_pointer - FRAME_OFFSET_FLAGS];
+  src.raw           = stack[frame_pointer - FRAME_OFFSET_SRC];
+  dst.raw           = stack[frame_pointer - FRAME_OFFSET_DST];
+  sp = frame_pointer - FRAME_HEADER_SIZE; // Drop the header
+  frame_pointer = old_fp;
+  src_dst = (state_flags & 1) != 0;
+  op = (state_flags >> 8) & 0xFF;
+  num = ret_val; 
+  src.raw = 0;   
+  call_depth--;
+*/
+                        if (op_count == 4) begin 
+                            pc <= stack_read_data[11:0]; //return address; restore pc
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - arg_count - 32'd1; // skip args
                         end else if (op_count == 3) begin
-                            pc <= stack_read_data[11:0];
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
-                        end else if (op_count == 2) begin
+                        end else if (op_count == 2) begin //restore op (?)
                             shadow_op <= stack_read_data[7:0];
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
-                        end else if (op_count == 1) begin
+                        end else if (op_count == 1) begin //restore dest
                             dest <= stack_read_data[4:0];
+                            func_ptr <= stack_read_data[4:0]; // Restore func_ptr to handle nested functions cleanly
                         end
                         op_count <= op_count - 1;
                     end else if (op == "@") begin
