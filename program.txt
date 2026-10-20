@@ -1,17 +1,12 @@
 # The instructions are converted to program.hex and loaded into the
 # processor RAM. The "now x is y" are parsed into asserts.vh
 
-# --- STACK. POINTER IS 's' ---
-s:0         #now s is 0 Clearing the stack
-z,42        #now s is 1 push 42 to stack
-            # now stack 0 is 42
-s:0
 
 # --- STRING POINTER / FUNCTION ---
 a:0
-f:"a+1."  # The CPU should assign the pointer to f and completely skip the inside!
+f:"a:a+1."  # The CPU should assign the pointer to f and completely skip the inside!
 a=0       # now flag is 1 (Proves function string wasn't executed)
-f(a,)      # now a is 1
+f()       # now a is 1
           # now s is 0
 
 # --- BASIC ACCUMULATION & COMBINATIONAL ALU ---
@@ -90,4 +85,9 @@ a@1:2     # Write 2 to memory address a+1 aka b so now b is 2
 c:3       # now c is 3
 d:a@b     # Write a@b (aka c) to d so now d is 3
 
+# --- STACK. POINTER IS 's' ---
+s:0         #now s is 0 Clearing the stack
+z,42        #now s is 1 push 42 to stack
+            # now stack 0 is 42
+s:0
 
