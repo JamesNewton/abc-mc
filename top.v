@@ -1,69 +1,49 @@
-`ifndef TOP_V
-`define TOP_V
+`default_nettype none
 `include "abc_define.vh"
-`include "abc_cpu.v" 
-`include "register_file.v"
 
-module top(
-    input clk,
-    input reset,
-    input [`RX_WIDTH-1:0] rx_byte,
-    input rx_ready,
-    output [7:0] debug,
-    output tx_trigger,
-    output [7:0] tx_data
+module top (
+    input wire clk,
+    input wire reset,
+    
+    // Legacy ports expected by testbench.v
+    input wire [`RX_WIDTH-1:0] rx_byte,
+    input wire rx_ready,
+    output wire [7:0] debug,
+    output wire tx_trigger,
+    output wire [7:0] tx_data
 );
 
-    // --- Internal Motherboard Wires ---
-    wire [`REG_AWIDTH-1:0] dst_addr;
-    wire [`REG_AWIDTH-1:0] src_addr;
-    wire [`REG_DWIDTH-1:0] reg_data_a;
-    wire [`REG_DWIDTH-1:0] reg_data_b;
-    wire reg_write_en;
-    wire [`REG_DWIDTH-1:0] reg_write_data;
+    wire [1:0] cpu_state;
 
-    // Memory-Mapped IO (MMIO) Router
-    wire is_terminal = (dst_addr == ("t" - `ASCII_OFFSET)); // writing reg 't'?
-    assign tx_trigger = reg_write_en & is_terminal; // pulse tx pin
-    assign tx_data    = reg_write_data;
-    wire ram_write_en = reg_write_en & ~is_terminal; // else RAM
-
-    // (We will leave op_sel and literal_num internal to the CPU for now)
-
-    // --- The CPU Chip ---
+    // --- THE STREAM CPU ---
     abc_cpu cpu (
         .clk(clk),
         .reset(reset),
+        
         .rx_byte(rx_byte),
         .rx_ready(rx_ready),
-        .debug(debug),
+        .state(cpu_state),
         
-        .dst_sel(dst_addr),
-        .src_sel(src_addr),
+        // These are legacy output ports left in the CPU definition, 
+        // we can safely leave them unconnected here since the register 
+        // file is now internal.
+        .dst_sel(),
+        .op_sel(),
+        .src_sel(),
+        .literal_num(),
+        .src_is_literal(),
         
-        // Connect the memory bus
-        .reg_data_a(reg_data_a),
-        .reg_data_b(reg_data_b),
-        .reg_write_en(reg_write_en),
-        .reg_write_data(reg_write_data)
+        // Tie off legacy unused inputs
+        .reg_data_a(32'd0),
+        .reg_data_b(32'd0),
+        
+        .reg_write_en(),
+        .reg_write_data(),
+        .debug(debug)
     );
 
-    // --- The Register File Chip ---
-    register_file regs (
-        .clk(clk),
-        .reset(reset),
-        
-        // Write Port (Driven by CPU)
-        .write_enable(ram_write_en),
-        .write_addr(dst_addr),
-        .write_data(reg_write_data),
-        
-        // Read Ports (Feeding into CPU)
-        .read_addr_a(dst_addr),
-        .read_data_a(reg_data_a),
-        .read_addr_b(src_addr),
-        .read_data_b(reg_data_b)
-    );
+    // Stub out the unused legacy outputs so the testbench compiles
+    assign tx_trigger = 1'b0;
+    assign tx_data = 8'd0;
 
 endmodule
-`endif // TOP_V

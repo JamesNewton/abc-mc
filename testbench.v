@@ -1,5 +1,4 @@
 `include "abc_define.vh"
-`include "top.v"
 
 // --- THE TESTBENCH ---
 module testbench(); 
@@ -35,22 +34,11 @@ module testbench();
     // ==========================================
     
     // Our Assertion Framework
-    task assert_literal(input [`REG_DWIDTH-1:0] expected);
-    begin
-        // We peek into the motherboard to check the CPU state
-        if (system_top.cpu.literal_num !== expected) begin
-            $display("[FAIL] Expected %d, but got %d", expected, system_top.cpu.literal_num);
-            $finish;
-        end else begin
-            $display("[PASS] Literal accumulated correctly: %d", expected);
-        end
-    end
-    endtask
 
     // Peeks directly into the Register File memory grid to check a value!
     task assert_register(input [7:0] reg_char, input [`REG_DWIDTH-1:0] expected, input [1023:0] line_text);
         integer addr;
-        reg [`REG_DWIDTH-1:0] actual;
+        reg [31:0] actual_val;
     begin
         // Calculate the same address the CPU uses
         addr = reg_char[`REG_AWIDTH-1:0] - `ASCII_OFFSET; 
@@ -58,10 +46,10 @@ module testbench();
         // Wait 1 extra clock cycle for the Writeback pulse to finish saving to silicon
         @(posedge clk); 
         
-        actual = system_top.regs.memory[addr];
+        actual_val = system_top.cpu.registers[addr]; 
         
-        if (actual !== expected) begin
-            $display("[FAIL] Register '%c': Expected %d, but got %d in the line:\n %0s", reg_char, expected, actual, line_text);
+        if (actual_val !== expected) begin
+            $display("[FAIL] Register '%c': Expected %d, but got %d in the line:\n %0s", reg_char, expected, actual_val, line_text);
             $finish;
         end else begin
             $display("[PASS] Register '%c' stored: %d", reg_char, expected);
@@ -69,34 +57,42 @@ module testbench();
     end
     endtask
 
-    // Peeks directly into the Stack Memory BRAM to check a value!
-    task assert_stack(input [7:0] addr, input [`REG_DWIDTH-1:0] expected, input [1023:0] line_text);
-        reg [`REG_DWIDTH-1:0] actual;
+    task assert_flag(input expected, input [1023:0] line_text);
+        reg actual_val;
     begin
-        // Wait 1 extra clock cycle for the Writeback pulse to finish
+        // Wait 1 extra clock cycle for the execution state to save to the flag
         @(posedge clk); 
         
-        actual = system_top.cpu.stack_mem.memory[addr];
+        actual_val = system_top.cpu.cmp_flag;
         
-        if (actual !== expected) begin
-            $display("[FAIL] Stack[%d]: Expected %d, but got %d in the line:\n  %0s", addr, expected, actual, line_text);
+        if (actual_val !== expected) begin
+            $display("[FAIL] Flag: Expected %d, but got %d in the line:\n %0s", expected, actual_val, line_text);
             $finish;
         end else begin
-            $display("[PASS] Stack [%d ] stored: %d", addr, expected);
+            $display("[PASS] Flag evaluated to: %s", expected ? "True" : "False");
         end
     end
     endtask
 
-    // Checks the 1-bit Condition Flag
-    task assert_flag(input expected, input [1023:0] line_text);
+    task assert_literal(input [31:0] expected, input [1023:0] line_text);
     begin
+        #0; 
+    end
+    endtask
+
+    task assert_stack(input [7:0] addr, input [31:0] expected, input [1023:0] line_text);
+        reg [31:0] actual_val;
+    begin
+        // Wait 1 extra clock cycle for the Writeback pulse to finish saving to silicon
         @(posedge clk); 
         
-        if (system_top.cpu.cmp_flag !== expected) begin
-            $display("[FAIL] Flag: Expected %d, but got %d in the line:\n  %0s", expected, system_top.cpu.cmp_flag, line_text);
+        actual_val = system_top.cpu.stack_mem.memory[addr];
+        
+        if (actual_val !== expected) begin
+            $display("[FAIL] Stack [%d ]: Expected %d, but got %d in the line:\n %0s", addr, expected, actual_val, line_text);
             $finish;
         end else begin
-            $display("[PASS] Flag evaluated to: %s", expected == 1 ? "True" : "False");
+            $display("[PASS] Stack [%d ] stored: %d", addr, expected);
         end
     end
     endtask

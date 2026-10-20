@@ -35,6 +35,7 @@
 `define ASCII_OFFSET ("a" - "`")
 `define REG_R_RADIX ("r" - "a")
 `define REG_S_STACK ("s" - "a")
+`define REG_START 8'd97
 
 `define ASCII_CR 8'd13
 `define ASCII_LF 8'd10

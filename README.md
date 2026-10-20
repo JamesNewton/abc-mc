@@ -9,11 +9,17 @@ So this *directly* executes instructions (not source code) like `c:a/6+1`; takin
 This is a work in progress: See the source [program.txt](program.txt) file for the current functionality. This file is "compiled" into hex to load into the FPGA RAM and into asserts for the [testbench.v](testbench.v) file to simulate. 
 
 ## The Execution Pipeline (DST-OP-SRC)
-The heart of the processor is a Finite State Machine (FSM) tracking the `dst_op_src` sequence. 
-* Instructions flow sequentially: incoming bytes are pre-fetched and then loaded into the **Destination** (`dst`) register, then the FSM increments to expect an **Operation** (`op`), and increments again to expect a **Source** (`src`).
-* The CPU uses delayed execution. When a complete `dst_op_src` set is loaded, it waits. When the next `op` (or EOL) arrives, the FSM stalls to execute the pending math, commits the result to the `dst`, and then shifts the newly arrived Operation into the `op` register, clearing the `src`.
-* After each execution, decrementing the FSM back to the Operation state allows for chained mathematics (e.g., `a:b+c\n`).
-* A carriage return (or line end) is an op which resets the FSM back to 0 (dst), ready for a new line of code.
+The basis of this processor is the destination, operation, source pattern. A `next_inst` register holds incoming ASCII text characters brought in during a `LOAD` state. If the `dest` register is empty, and the character matches a source or destination pattern (e.g. from 'a' to 'z'), then it is routed into that register. A `dest_type` register is set to `TYPE_REG` (an enum). If the character matches the pattern of an operation (e.g. '+', '-', etc...) then it is placed in the `op` register. Once we have a destination and operation, new characters can be placed in the `source` register and the `source_type` set based on their type. They might be registers, or built in functions ('A'-'Z') `TYPE_FUNC`. 
+
+Destinations or sources which match a numerical pattern instead are accumulated into a `num` register after it is multiplied by the current radix. Numbers can be used in place of a source or as modifiers to operations, indexing, etc...
+
+Once we have a full set of `dest`, `op`, and `source` (or `num`), if a new character comes in which matches the operation or source / destination pattern, we switch to the`EXEC` state and act on the current set. The `op_count` register is set to 1,and we enter a case on the operation, where each operation can do what needs to be done, including increasing the `op_count`. As long as it remains above 0, we continue to remain in the `EXEC` state, once it's allowed to drop to 0, we clean up the current operation and source, replacing them with the new incoming character. 
+
+If the new character is a newline (/n), after we finish executing, we also clear the destination, and return to the loading state, starting over on a new line. 
+
+The use of a modifiable count in the execution state permits complex, multi-step operations such as multi-step "shift and add" multiply, restoring division, or stack push / pop operations. 
+
+Several registers have special uses as program counter, stack pointer, radix, etc... this makes it very easy to change or read those values in programs.
 
 ## The Register File
 The CPU features an array of 26 wide registers, mapped directly to the alphabet (`a` through `z`). Several registers are hardwired to processor-level functions:
@@ -23,19 +29,20 @@ The CPU features an array of 26 wide registers, mapped directly to the alphabet 
 * `s`: Stack Pointer
 * `t`: Terminal
 
-Note on Radix & Hexadecimal: Hex parsing can use a context-aware dual-classifier to resolve the a-f ambiguity. In STATE_DST, a-z are strictly registers. In STATE_SRC, if the radix register (r) is 16, a-f are intercepted as numeric literals and jump to STATE_NUM. Math accumulation dynamically shifts by 1, 3, or 4 based on r.
+Note on Radix & Hexadecimal: Hex parsing can use a context-aware dual-classifier to resolve the a-f ambiguity. For destinations, a-z are strictly registers. But for a source, if the radix register (r) is 16, a-f are intercepted as numeric literals and treated as numbers. Math accumulation dynamically shifts by 1, 3, or 4 based on r.
 
 ## Instruction Decoding & Accumulation
 Raw ASCII bytes from the instruction stream are decoded in hardware using combinational logic.
-* **Comparators:** The hardware checks the ASCII range of the incoming byte. If it is a letter, it subtracts `'a'` to generate a 0-25 register index. If it is punctuation, it subtracts `' '` to decode the operation.
+* **Comparators:** The hardware checks the ASCII range of the source or destination if it is a register type. If it is a letter, it subtracts `'a'` to generate a 0-25 register index.
 * **Number Accumulation:** If the incoming byte is a digit, it bypasses the register selection. The `num` register accumulates the value using a shift-and-add logic block (equivalent to the current radix, e.g. for 10: `(num << 3) + (num << 1) + digit`) to multiply by one digit place without requiring a massive hardware multiplier.
 
 ## Execution & The ALU
-* **Pipeline Stalls:** Because numbers can be multiple digits long, the hardware does not know a Source is complete until the *next* Operation (or EOL) arrives. When a new OP arrives, the CPU "stalls" the pipeline for one clock cycle to execute the previous operation before loading the new one.
+* **Pipeline Stalls:** Because numbers can be multiple digits long, the hardware does not know a Source is complete until the *next* Operation (or EOL) arrives. When a new OP arrives, the CPU "stalls" the pipeline for at least one clock cycle, controlled by `op_count` to execute the previous operation before loading the new one.
 * **The ALU MUX:** The Arithmetic Logic Unit combines the Destination (Side A) and the Source (Side B). A hardware Multiplexer (MUX) acts as a switch track for Side B, seamlessly routing either the decoded Source Register or the raw `num` accumulator into the ALU based on the instruction type.
+* **Stack Operations** The additional clocks required to execute the steps required to push and pop data, build stack frames for parameter passing and call / return processing can be accomplished by sub-cases changing `op_count`. 
 
 <hr>
-&nbsp;
+
 <hr>
 
 # The Original Language
