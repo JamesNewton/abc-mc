@@ -65,7 +65,7 @@ module abc_cpu#(
     reg [7:0] op_count;
     reg [7:0] pending_char;
     reg [4:0] arg_count;
-    reg [4:0] func_ptr; // NEW: Safely anchors the function pointer while parsing arguments!
+    reg [4:0] func_ptr; 
     
     // --- SHADOW REGISTERS (For Pointer Indirection) ---
     reg [4:0] shadow_dest;
@@ -113,7 +113,6 @@ module abc_cpu#(
     wire is_space = (inst_byte == " " || inst_byte == "\t");
     
     // Exclude string modifiers and function triggers from operators
-    // FIXED: Removed ',' from exclusion so it routes normally and evaluates its source
     wire is_op  = (!is_alpha && !is_digit && !is_eol && !is_space 
         && inst_byte != "#" && inst_byte != "?" && inst_byte != "!" && inst_byte != "." 
         && inst_byte != "@" && inst_byte != "\"" && inst_byte != "(" && inst_byte != ")"
@@ -180,12 +179,21 @@ module abc_cpu#(
             
             else if (fsm_state == STATE_FETCH_WAIT) begin
                 pc <= pc + 1; // Default advance PC
-
+                
+                // LEAK 3 FIX: Comments must force an execution flush on EOL!
                 if (in_comment) begin
-                    if (is_eol) in_comment <= 0;
-                    fsm_state <= STATE_FETCH;
+                    if (is_eol) begin
+                        in_comment <= 0;
+                        pending_char <= inst_byte;
+                        op_count <= 1;
+                        fsm_state <= STATE_EXEC;
+                    end else begin
+                        fsm_state <= STATE_FETCH;
+                    end
                 end 
                 else if (inst_byte == "(") begin
+                    shadow_op <= op;      
+                    shadow_dest <= dest; 
                     op <= "(";
                     op_count <= 2; 
                     fsm_state <= STATE_EXEC;
@@ -202,14 +210,11 @@ module abc_cpu#(
                 else if (inst_byte == "\"") begin
                     in_string <= 1; 
                     if (dest_type != TYPE_NONE && op != 0 && source_type == TYPE_NONE) begin
-                        num <= pc + 1; //Point to the first inside char
+                        num <= pc + 1; 
                         source_type <= TYPE_NUM;
                     end
                     fsm_state <= STATE_FETCH;
                 end
-                // --- CONDITIONAL LOGIC ---
-                // Control chars MUST force pending instructions to execute first.
-                // We only process them if we are skipping, or if the pipeline is empty.
                 else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "#") begin
                     in_comment <= 1;
                     fsm_state <= STATE_FETCH;
@@ -241,29 +246,29 @@ module abc_cpu#(
                         exec_depth <= exec_depth - 1;
                         fsm_state <= STATE_FETCH;
                     end else begin
-                        // Both are 0: This is a function return! Trigger standalone operator.
                         op <= inst_byte;
-                        op_count <= 4; // Currently takes 4 cycles to extract the frame 
+                        op_count <= 4; 
                         fsm_state <= STATE_EXEC; 
                     end
                 end
                 else if (skip_depth > 0) begin
-                    fsm_state <= STATE_FETCH; // Ignore instructions while skipping
+                    fsm_state <= STATE_FETCH; 
                 end
-                // --- END CONDITIONAL LOGIC ---
-                
                 else if (is_space) begin
                     fsm_state <= STATE_FETCH;
                 end 
-                // DESTINATION ROUTING
                 else if (dest_type == TYPE_NONE) begin
                     if (is_reg) begin
                         dest <= inst_byte - `REG_START;
                         dest_type <= TYPE_REG;
                         fsm_state <= STATE_FETCH;
                     end 
+                    else if (is_digit) begin 
+                        num <= digit_val;
+                        dest_type <= TYPE_NUM;
+                        fsm_state <= STATE_FETCH;
+                    end
                     else if (is_op) begin
-                        // Standalone Operators (like [ and ])
                         op <= inst_byte;
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
@@ -272,16 +277,17 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end
                 end 
-                // OPERATION ROUTING
                 else if (op == 0) begin
                     if (is_op) op <= inst_byte;
                     else if (inst_byte == "@") begin 
                         op <= "@";
                         has_shadow <= 0; 
                     end
+                    else if (dest_type == TYPE_NUM && is_digit) begin
+                        num <= (num * radix) + digit_val;
+                    end
                     fsm_state <= STATE_FETCH;
                 end 
-                // SOURCE ROUTING
                 else begin
                     if (is_num && (source_type == TYPE_NONE || source_type == TYPE_NUM)) begin
                         num <= (num * radix) + digit_val; 
@@ -293,28 +299,25 @@ module abc_cpu#(
                         source_type <= TYPE_REG;
                         fsm_state <= STATE_FETCH;
                     end 
-                    // POINTER SHADOW INTERCEPT
                     else if (inst_byte == "@" && !has_shadow) begin
                         shadow_dest <= dest;
                         shadow_op <= op;
                         has_shadow <= 1;
                         
-                        dest <= source; // Promote the array variable to the base destination
+                        dest <= source; 
                         dest_type <= TYPE_REG;
                         op <= "@";
                         source_type <= TYPE_NONE;
                         num <= 0;
                         fsm_state <= STATE_FETCH;
                     end
-                    // STREAM TRIGGER
                     else begin
                         pending_char <= inst_byte;
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
 
-                        // Rewind PC if this character is NOT intentionally consumed by the cleanup block!
                         if (!(is_eol || inst_byte == "+" || inst_byte == "-" || inst_byte == "&" || inst_byte == "|" || inst_byte == "^" || inst_byte == "*" || inst_byte == "/" || inst_byte == "<" || inst_byte == ">" || inst_byte == "=" || inst_byte == "," || inst_byte == ":" || inst_byte == "@")) begin
-                            pc <= pc - 1; 
+                            pc <= pc; 
                         end
                     end
                 end
@@ -322,128 +325,111 @@ module abc_cpu#(
 
             // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
-                // $display("[HW DEBUG] Time: %0t | PC: %d | OP: %c | OpC: %d | S: %d | W_EN: %b | W_ADDR: %d | R_DATA: %x", 
-                //     $time, pc, op, op_count, registers["s" - `REG_START], stack_write_en, stack_write_addr, stack_read_data
-                // );
+                $display("[HW DEBUG] Time: %0t | PC: %d | OP: %c | OpC: %d | S: %d", 
+                    $time, pc, op, op_count, registers["s" - `REG_START]
+                );
                 if (op_count > 0) begin
                     if (op == "<" || op == ">" || op == "=") begin
                         cmp_flag <= alu_result[0];
                     end else if (op == "[") begin 
-                        // Start loop: push current PC to stack
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
-                        stack_write_data <= {20'd0, pc}; // Save PC
+                        stack_write_data <= {20'd0, pc}; 
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                     end else if (op == "]") begin 
-                        // End loop: jump or pop
                         if (cmp_flag) begin
-                            pc <= stack_read_data[11:0]; // Jump back to loop start
+                            pc <= stack_read_data[11:0]; 
                         end else begin
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1; 
                         end
                     end else if (op == "(") begin 
-/* From the C++ version 
-    stack[sp++] = dst.raw;
-    stack[sp++] = src.raw;
-    stack[sp++] = state_flags;
-    stack[sp++] = frame_pointer;      // Save caller's frame
-    stack[sp++] = arg_count;  // Save caller's arg count
-    stack[sp++] = indent.raw;         // Save the caller's indentation state
-    frame_pointer = sp; // New frame starts here
-*/
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
                         if (op_count == 2) begin
-                            stack_write_data <= dest; 
-                            func_ptr <= dest; // SAVE the function pointer safely!
+                            stack_write_data <= shadow_dest; 
+                            func_ptr <= (shadow_op != 0) ? source : shadow_dest; 
                         end 
                         else if (op_count == 1) begin
                             stack_write_data <= {24'd0, shadow_op}; 
-                            arg_count <= 0; // reset argument count
+                            arg_count <= 0; 
                         end
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                         op_count <= op_count - 1;
-                    end else if (op == ",") begin // Push NUM as argument to stack
-                        // stack[sp++] = num;
-                        // FIXED: Reverted back to perfectly pushing alu_operand_b (source)
+                    end else if (op == ",") begin 
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
                         stack_write_data <= alu_operand_b; 
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
-                        // current_arg_count++; //arg count for variable argument functions
                         arg_count <= arg_count + 5'd1;
                     end else if (op == ")") begin 
-/*
-    stack[sp++] = num;
-    current_arg_count++;
-      stack[sp++] = (long)pc_ptr; // Push Return Address to the stack
-      // OFFSET BY -1 because the evaluateABC loop will automatically do pc_ptr++ right after this
-      pc_ptr = &code_ram[func_src.meta.value] - 1; 
-      
-      // Lock in the lexical scope for the new function!
-      scope_frame_pointer = frame_pointer;
-      scope_arg_count = current_arg_count;
-*/
                         if (op_count == 2) begin
-                            if (dest_type != TYPE_NONE) begin // Only push if there's an actual argument
+                            if (source_type != TYPE_NONE) begin 
+                                stack_write_en <= 1;
+                                stack_write_addr <= registers["s" - `REG_START][7:0];
+                                stack_write_data <= (source_type == TYPE_NUM) ? num : registers[source]; 
+                                registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
+                                arg_count <= arg_count + 5'd1; 
+                            end else if (dest_type != TYPE_NONE) begin 
                                 stack_write_en <= 1;
                                 stack_write_addr <= registers["s" - `REG_START][7:0];
                                 stack_write_data <= (dest_type == TYPE_NUM) ? num : registers[dest]; 
                                 registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                                 arg_count <= arg_count + 5'd1; 
                             end else begin
-                                stack_write_en <= 0; // Empty args like f()
+                                stack_write_en <= 0; 
                             end
                         end else if (op_count == 1) begin
                             stack_write_en <= 1;
                             stack_write_addr <= registers["s" - `REG_START][7:0];
-                            stack_write_data <= {20'd0, pc}; 
+                            stack_write_data <= {20'd0, pc + 12'd1}; 
                             registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
-                            pc <= registers[func_ptr][11:0]; // Jump to anchored pointer!
+                            pc <= registers[func_ptr][11:0]; 
+                            
+                            // LEAK 2 FIX: Wipe pipeline before jumping so args don't bleed into function math!
+                            num <= 0;
+                            source_type <= TYPE_NONE;
+                            dest_type <= TYPE_NONE;
+                            op <= 0;
                         end
                         op_count <= op_count - 1;
                     end else if (op == ".") begin
-/*
-  pc_ptr = (const char*)stack[--sp]; // Pop Return Address
-  sp = frame_pointer;   // Restore previous frame
-  indent.raw        = stack[frame_pointer - FRAME_OFFSET_INDENT];
-  current_arg_count = stack[frame_pointer - FRAME_OFFSET_ARGC];
-  long old_fp       = stack[frame_pointer - FRAME_OFFSET_FP];
-  long state_flags  = stack[frame_pointer - FRAME_OFFSET_FLAGS];
-  src.raw           = stack[frame_pointer - FRAME_OFFSET_SRC];
-  dst.raw           = stack[frame_pointer - FRAME_OFFSET_DST];
-  sp = frame_pointer - FRAME_HEADER_SIZE; // Drop the header
-  frame_pointer = old_fp;
-  src_dst = (state_flags & 1) != 0;
-  op = (state_flags >> 8) & 0xFF;
-  num = ret_val; 
-  src.raw = 0;   
-  call_depth--;
-*/
                         if (op_count == 4) begin 
-                            pc <= stack_read_data[11:0]; //return address; restore pc
-                            registers["s" - `REG_START] <= registers["s" - `REG_START] - arg_count - 32'd1; // skip args
+                            num <= (dest_type == TYPE_REG) ? registers[dest] : num;
+                            source_type <= TYPE_NUM; 
+                            
+                            pc <= stack_read_data[11:0]; 
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - arg_count - 32'd1; 
                         end else if (op_count == 3) begin
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
-                        end else if (op_count == 2) begin //restore op (?)
-                            shadow_op <= stack_read_data[7:0];
+                        end else if (op_count == 2) begin 
+                            shadow_op <= stack_read_data[7:0]; 
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
-                        end else if (op_count == 1) begin //restore dest
+                        end else if (op_count == 1) begin 
                             dest <= stack_read_data[4:0];
-                            func_ptr <= stack_read_data[4:0]; // Restore func_ptr to handle nested functions cleanly
+                            dest_type <= (shadow_op != 0) ? TYPE_REG : TYPE_NONE; 
+                            func_ptr <= stack_read_data[4:0]; 
+                            op <= shadow_op; 
+                            pending_char <= 0; 
+                            
+                            // LEAK 1 FIX: Discard unwanted return value to protect the next parsing sequence!
+                            if (shadow_op == 0) begin
+                                source_type <= TYPE_NONE;
+                                num <= 0;
+                            end
+                            
+                            op_count <= 0;
+                            fsm_state <= STATE_FETCH; 
                         end
-                        op_count <= op_count - 1;
+                        
+                        if (op_count > 1) op_count <= op_count - 1; 
                     end else if (op == "@") begin
                         if (has_shadow) begin
-                            // Evaluate memory, restore the shadow, and trigger the original operation!
                             num <= registers[dest + alu_operand_b[4:0]];
                             source_type <= TYPE_NUM;
                             dest <= shadow_dest;
                             op <= shadow_op;
                             has_shadow <= 0;
-                            // Keeping op_count > 0 perfectly syncs the restored operation to the next clock!
                         end else begin
-                            // Modify destination pointer in-place and quietly fetch the real operation
                             dest <= dest + alu_operand_b[4:0];
                             op <= 0;
                             source_type <= TYPE_NONE;
@@ -455,21 +441,27 @@ module abc_cpu#(
                     end
                     
                     if (op != "@" || !has_shadow) begin
-                        op_count <= op_count - 1;
+                        if (op != ".") op_count <= op_count - 1; 
                     end
                 end else begin
-                    // CLEANUP & ROUTE PENDING CHAR
-                    stack_write_en <= 0; // De-assert stack write pulse
+                    stack_write_en <= 0; 
                     
                     if (   pending_char == "\n" 
                         || pending_char == ";" 
                         || pending_char == 8'd0 
                         || pending_char == ")" 
-                        || pending_char == "."
-                     ) begin
+                     ) begin 
                         dest_type <= TYPE_NONE;
                         op <= 0;
+                        source_type <= TYPE_NONE;
+                        num <= 0;
+                        fsm_state <= STATE_FETCH;
                     end 
+                    else if (pending_char == ".") begin
+                        op <= ".";
+                        op_count <= 4;
+                        fsm_state <= STATE_EXEC;
+                    end
                     else if (pending_char == "+" || pending_char == "-" 
                         || pending_char == "&" || pending_char == "|" || pending_char == "^" 
                         || pending_char == "*" || pending_char == "/" 
@@ -478,17 +470,17 @@ module abc_cpu#(
                         || pending_char == "("
                         ) begin
                         op <= pending_char;
+                        source_type <= TYPE_NONE;
+                        num <= 0;
+                        fsm_state <= STATE_FETCH;
                     end 
                     else begin
                         dest_type <= TYPE_NONE;
                         op <= 0;
+                        source_type <= TYPE_NONE;
+                        num <= 0;
+                        fsm_state <= STATE_FETCH;
                     end
-                    
-                    source_type <= TYPE_NONE;
-                    num <= 0;
-                    
-                    // Dropping to FETCH perfectly synchronizes fsm_state == 0 with your assertions!
-                    fsm_state <= STATE_FETCH;
                 end
             end
         end
@@ -501,7 +493,7 @@ module abc_cpu#(
             watchdog <= 0;
         end else begin
             watchdog <= watchdog + 1;
-            if (watchdog > 5000) begin 
+            if (watchdog > 200) begin 
                 $display("[FATAL] Watchdog timeout reached. Killing simulation.");
                 $finish;
             end
