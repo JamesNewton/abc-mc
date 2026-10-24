@@ -13,10 +13,10 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("s", 0, "# now s is 0");
 
-        // Sync to line: b:f(2)    # now b is 1 the return value from the function.
+        // Sync to line: b:f(2)    # now b is 3 the return value from the function.
         wait(system_top.cpu.pc >= 30 && system_top.cpu.fsm_state == 0);
         @(posedge clk); // Give memory 1 tick to save
-        assert_register("b", 1, "b:f(2)    # now b is 1 the return value from the function.");
+        assert_register("b", 3, "b:f(2)    # now b is 3 the return value from the function.");
 
         // Sync to line: c:g(5)      #now c is 16
         wait(system_top.cpu.pc >= 50 && system_top.cpu.fsm_state == 0);

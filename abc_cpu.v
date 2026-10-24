@@ -4,6 +4,10 @@
 `include "abc_define.vh"
 `include "bram.v"
 
+// `define DEBUG_EXE
+// `define DEBUG_REG
+// `define DEBUG_ALU
+
 // --- CPU MODULE ---
 module abc_cpu#(
     parameter STATE_FETCH      = 0,
@@ -180,7 +184,6 @@ module abc_cpu#(
             else if (fsm_state == STATE_FETCH_WAIT) begin
                 pc <= pc + 1; // Default advance PC
                 
-                // LEAK 3 FIX: Comments must force an execution flush on EOL!
                 if (in_comment) begin
                     if (is_eol) begin
                         in_comment <= 0;
@@ -215,6 +218,9 @@ module abc_cpu#(
                     end
                     fsm_state <= STATE_FETCH;
                 end
+                // --- CONDITIONAL LOGIC ---
+                // Control chars MUST force pending instructions to execute first.
+                // We only process them if we are skipping, or if the pipeline is empty.
                 else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "#") begin
                     in_comment <= 1;
                     fsm_state <= STATE_FETCH;
@@ -254,9 +260,12 @@ module abc_cpu#(
                 else if (skip_depth > 0) begin
                     fsm_state <= STATE_FETCH; 
                 end
+                // --- END CONDITIONAL LOGIC ---
+                
                 else if (is_space) begin
                     fsm_state <= STATE_FETCH;
                 end 
+                // DESTINATION ROUTING
                 else if (dest_type == TYPE_NONE) begin
                     if (is_reg) begin
                         dest <= inst_byte - `REG_START;
@@ -277,6 +286,7 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end
                 end 
+                // OPERATION ROUTING
                 else if (op == 0) begin
                     if (is_op) op <= inst_byte;
                     else if (inst_byte == "@") begin 
@@ -288,6 +298,7 @@ module abc_cpu#(
                     end
                     fsm_state <= STATE_FETCH;
                 end 
+                // SOURCE ROUTING
                 else begin
                     if (is_num && (source_type == TYPE_NONE || source_type == TYPE_NUM)) begin
                         num <= (num * radix) + digit_val; 
@@ -295,10 +306,14 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end 
                     else if (is_reg && source_type == TYPE_NONE) begin
+                        `ifdef DEBUG_REG
+                        $display("[DEBUG REG] Read Reg: %c | Value: %d", inst_byte, registers[inst_byte - `REG_START]);
+                        `endif
                         source <= inst_byte - `REG_START;
                         source_type <= TYPE_REG;
                         fsm_state <= STATE_FETCH;
                     end 
+                    // POINTER SHADOW INTERCEPT
                     else if (inst_byte == "@" && !has_shadow) begin
                         shadow_dest <= dest;
                         shadow_op <= op;
@@ -311,6 +326,7 @@ module abc_cpu#(
                         num <= 0;
                         fsm_state <= STATE_FETCH;
                     end
+                    // STREAM TRIGGER
                     else begin
                         pending_char <= inst_byte;
                         op_count <= 1;            
@@ -325,10 +341,17 @@ module abc_cpu#(
 
             // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
-                $display("[HW DEBUG] Time: %0t | PC: %d | OP: %c | OpC: %d | S: %d", 
+                `ifdef DEBUG_EXE
+                $display("[DEBUG EXE] Time: %0t | PC: %d | OP: %c | OpC: %d | S: %d", 
                     $time, pc, op, op_count, registers["s" - `REG_START]
                 );
+                `endif
                 if (op_count > 0) begin
+                    `ifdef DEBUG_ALU
+                    if (op_count == 1 && op != 0 && op != "(" && op != ")" && op != "[" && op != "]" && op != "." && op != "@" && op != ",") begin
+                        $display("[DEBUG ALU] Math: %d %c %d = %d", alu_operand_a, op, alu_operand_b, alu_result);
+                    end
+                   `endif
                     if (op == "<" || op == ">" || op == "=") begin
                         cmp_flag <= alu_result[0];
                     end else if (op == "[") begin 
@@ -381,11 +404,10 @@ module abc_cpu#(
                         end else if (op_count == 1) begin
                             stack_write_en <= 1;
                             stack_write_addr <= registers["s" - `REG_START][7:0];
-                            stack_write_data <= {20'd0, pc + 12'd1}; 
+                            stack_write_data <= {20'd0, pc}; // THE FIX: Restore original exact pc anchor!
                             registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                             pc <= registers[func_ptr][11:0]; 
                             
-                            // LEAK 2 FIX: Wipe pipeline before jumping so args don't bleed into function math!
                             num <= 0;
                             source_type <= TYPE_NONE;
                             dest_type <= TYPE_NONE;
@@ -411,7 +433,6 @@ module abc_cpu#(
                             op <= shadow_op; 
                             pending_char <= 0; 
                             
-                            // LEAK 1 FIX: Discard unwanted return value to protect the next parsing sequence!
                             if (shadow_op == 0) begin
                                 source_type <= TYPE_NONE;
                                 num <= 0;
