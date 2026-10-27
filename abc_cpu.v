@@ -7,6 +7,7 @@
 // `define DEBUG_EXE
 // `define DEBUG_REG
 // `define DEBUG_ALU
+// `define DEBUG_JMP
 
 // --- CPU MODULE ---
 module abc_cpu#(
@@ -307,7 +308,8 @@ module abc_cpu#(
                     end 
                     else if (is_reg && source_type == TYPE_NONE) begin
                         `ifdef DEBUG_REG
-                        $display("[DEBUG REG] Read Reg: %c | Value: %d", inst_byte, registers[inst_byte - `REG_START]);
+                        $display("[DEBUG REG] Read Reg: %c | Global Value: %d | Current ArgCount: %d | Stack Ptr: %d", 
+                            inst_byte, registers[inst_byte - `REG_START], arg_count, registers["s" - `REG_START]);
                         `endif
                         source <= inst_byte - `REG_START;
                         source_type <= TYPE_REG;
@@ -402,6 +404,11 @@ module abc_cpu#(
                                 stack_write_en <= 0; 
                             end
                         end else if (op_count == 1) begin
+                            `ifdef DEBUG_JMP
+                            $display("[DEBUG JUMP] Jumping to FuncPtr: %d | Passed %d Args | Stack Ptr (s): %d", 
+                                func_ptr, arg_count, registers["s" - `REG_START] + 32'd1
+                            );
+                            `endif
                             stack_write_en <= 1;
                             stack_write_addr <= registers["s" - `REG_START][7:0];
                             stack_write_data <= {20'd0, pc}; // THE FIX: Restore original exact pc anchor!
@@ -514,7 +521,7 @@ module abc_cpu#(
             watchdog <= 0;
         end else begin
             watchdog <= watchdog + 1;
-            if (watchdog > 200) begin 
+            if (watchdog > 2000) begin 
                 $display("[FATAL] Watchdog timeout reached. Killing simulation.");
                 $finish;
             end
