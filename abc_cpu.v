@@ -206,7 +206,10 @@ module abc_cpu#(
             
             else if (fsm_state == STATE_FETCH_WAIT) begin
                 pc <= pc + 1; // Default advance PC
-                
+                if (inst_byte == 8'd0) begin
+                    fsm_state <= STATE_FETCH_WAIT;
+                    pc <= pc;
+                end
                 if (in_comment) begin
                     if (is_eol) begin
                         in_comment <= 0;
@@ -217,18 +220,6 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end
                 end 
-                else if (inst_byte == "(") begin
-                    shadow_op <= op;      
-                    shadow_dest <= dest; 
-                    op <= "(";
-                    op_count <= 4; // Takes 4 cycles to pack the full context frame!
-                    fsm_state <= STATE_EXEC;
-                end
-                else if (inst_byte == ")") begin
-                    op <= ")";
-                    op_count <= 2; 
-                    fsm_state <= STATE_EXEC;
-                end
                 else if (in_string) begin
                     if (inst_byte == "\"") in_string <= 0; 
                     fsm_state <= STATE_FETCH;
@@ -240,6 +231,18 @@ module abc_cpu#(
                         source_type <= TYPE_NUM;
                     end
                     fsm_state <= STATE_FETCH;
+                end
+                else if (inst_byte == "(") begin
+                    shadow_op <= op;      
+                    shadow_dest <= dest; 
+                    op <= "(";
+                    op_count <= 4; 
+                    fsm_state <= STATE_EXEC;
+                end
+                else if (inst_byte == ")") begin
+                    op <= ")";
+                    op_count <= 2; 
+                    fsm_state <= STATE_EXEC;
                 end
                 // --- CONDITIONAL LOGIC ---
                 // Control chars MUST force pending instructions to execute first.
