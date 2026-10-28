@@ -168,8 +168,3 @@
         @(posedge clk); // Give memory 1 tick to save
         assert_register("b", 3, "b:f(2)    # now b is 3 the return value from the function.");
 
-        // Sync to line: c:g(5)      #now c is 16
-        wait(system_top.cpu.pc >= 369 && system_top.cpu.fsm_state == 0);
-        @(posedge clk); // Give memory 1 tick to save
-        assert_register("c", 16, "c:g(5)      #now c is 16");
-

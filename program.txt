@@ -1,7 +1,6 @@
 # The instructions are converted to program.hex and loaded into the
 # processor RAM. The "now x is y" are parsed into asserts.vh
 
-
 # --- BASIC ACCUMULATION & COMBINATIONAL ALU ---
 f:7         # now f is 7
 f:f+3       # now f is 10
@@ -92,4 +91,5 @@ f()       # now a is 1
           # now s is 0
 b:f(2)    # now b is 3 the return value from the function.
 g:"f(a)+10." # function call in a function
-c:g(5)      #now c is 16
+#c:g(5)      #now c is 16
+

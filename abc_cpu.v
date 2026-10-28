@@ -7,14 +7,14 @@
 // `define DEBUG_EXE
 // `define DEBUG_REG
 // `define DEBUG_ALU
-// `define DEBUG_JMP
 
 // --- CPU MODULE ---
 module abc_cpu#(
     parameter STATE_FETCH      = 0,
     parameter STATE_FETCH_WAIT = 1,
     parameter STATE_EXEC       = 2,
-    parameter STATE_WIDTH      = 2
+    parameter STATE_FETCH_PARAM = 3,
+    parameter STATE_WIDTH      = 3
 )(
     input clk,
     input reset,
@@ -56,9 +56,10 @@ module abc_cpu#(
     );
 
     // --- STREAM PIPELINE REGISTERS ---
-    localparam TYPE_NONE = 2'd0;
-    localparam TYPE_REG  = 2'd1;
-    localparam TYPE_NUM  = 2'd2;
+    localparam TYPE_NONE  = 2'd0;
+    localparam TYPE_REG   = 2'd1;
+    localparam TYPE_NUM   = 2'd2;
+    localparam TYPE_PARAM = 2'd3; // NEW: Explicitly tracks stack-bound parameters!
 
     reg [4:0] dest;
     reg [1:0] dest_type;
@@ -71,6 +72,13 @@ module abc_cpu#(
     reg [7:0] pending_char;
     reg [4:0] arg_count;
     reg [4:0] func_ptr; 
+    
+    // --- SCOPE REGISTERS ---
+    reg [7:0] scope_frame_pointer;
+    reg [4:0] scope_arg_count;
+    reg [31:0] dest_param_val;
+    reg [4:0] param_fetch_addr;
+    reg param_is_dest;
     
     // --- SHADOW REGISTERS (For Pointer Indirection) ---
     reg [4:0] shadow_dest;
@@ -88,6 +96,18 @@ module abc_cpu#(
     reg [31:0] registers [0:25]; 
     wire [31:0] radix = registers["r" - `REG_START];
 
+    // --- BRAM ADDRESS MULTIPLEXER ---
+    wire is_alpha = (inst_byte >= "a" && inst_byte <= "z");
+    wire is_reg = is_alpha && !(is_digit || (is_hex && dest_type != TYPE_NONE && op != 0));
+    
+    // Sniff the lexer to instantly swing the BRAM address if it's an active parameter
+    wire is_reg_fetch = (fsm_state == STATE_FETCH_WAIT && is_reg && dest_type == TYPE_NONE && (inst_byte - `REG_START) < scope_arg_count);
+    wire is_src_fetch = (fsm_state == STATE_FETCH_WAIT && is_reg && source_type == TYPE_NONE && op != 0 && (inst_byte - `REG_START) < scope_arg_count);
+    
+    wire [7:0] active_stack_read_addr = (is_reg_fetch || is_src_fetch) ? 
+                                        (scope_frame_pointer + (inst_byte - `REG_START)) : 
+                                        (registers["s" - `REG_START][7:0] - 8'd1);
+
     // --- STACK MEMORY (BRAM) ---
     wire [31:0] stack_read_data;
     reg stack_write_en;
@@ -102,17 +122,14 @@ module abc_cpu#(
         .write_en(stack_write_en),
         .write_addr(stack_write_addr),
         .write_data(stack_write_data),
-        .read_addr(registers["s" - `REG_START][7:0] - 8'd1), // Prep read for top-of-stack
+        .read_addr(active_stack_read_addr),
         .read_data(stack_read_data)
     );
 
     // --- THE DYNAMIC LEXER ---
-    wire is_alpha = (inst_byte >= "a" && inst_byte <= "z");
     wire is_digit = (inst_byte >= "0" && inst_byte <= "9");
     wire is_hex   = (radix == 16) && (inst_byte >= "a" && inst_byte <= "f");
-    
     wire is_num = is_digit || (is_hex && dest_type != TYPE_NONE && op != 0);
-    wire is_reg = is_alpha && !is_num;
     
     wire is_eol = (inst_byte == "\n" || inst_byte == ";" || inst_byte == 8'd0);
     wire is_space = (inst_byte == " " || inst_byte == "\t");
@@ -128,7 +145,8 @@ module abc_cpu#(
                             (inst_byte - 8'd87);
 
     // --- THE ALU ---
-    wire [31:0] alu_operand_a = registers[dest];
+    // If destination is a parameter, pull its value from the fetched dest_param_val register!
+    wire [31:0] alu_operand_a = (dest_type == TYPE_PARAM) ? dest_param_val : registers[dest];
     wire [31:0] alu_operand_b = (source_type == TYPE_NUM) ? num : registers[source];
     reg  [31:0] alu_result;
 
@@ -163,6 +181,10 @@ module abc_cpu#(
             shadow_dest <= 0;
             shadow_op <= 0;
             has_shadow <= 0;
+            
+            scope_frame_pointer <= 0;
+            scope_arg_count <= 0;
+            dest_param_val <= 0;
             
             in_comment <= 0;
             in_string <= 0;
@@ -199,7 +221,7 @@ module abc_cpu#(
                     shadow_op <= op;      
                     shadow_dest <= dest; 
                     op <= "(";
-                    op_count <= 2; 
+                    op_count <= 4; // Takes 4 cycles to pack the full context frame!
                     fsm_state <= STATE_EXEC;
                 end
                 else if (inst_byte == ")") begin
@@ -254,7 +276,7 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end else begin
                         op <= inst_byte;
-                        op_count <= 4; 
+                        op_count <= 6; // Takes 6 cycles to pop the full frame!
                         fsm_state <= STATE_EXEC; 
                     end
                 end
@@ -269,9 +291,16 @@ module abc_cpu#(
                 // DESTINATION ROUTING
                 else if (dest_type == TYPE_NONE) begin
                     if (is_reg) begin
-                        dest <= inst_byte - `REG_START;
-                        dest_type <= TYPE_REG;
-                        fsm_state <= STATE_FETCH;
+                        if ((inst_byte - `REG_START) < scope_arg_count) begin
+                            param_is_dest <= 1;
+                            param_fetch_addr <= inst_byte - `REG_START; 
+                            fsm_state <= STATE_FETCH_PARAM;
+                        end else begin
+                            dest <= inst_byte - `REG_START;
+                            dest_type <= TYPE_REG;
+                            func_ptr <= inst_byte - `REG_START;
+                            fsm_state <= STATE_FETCH;
+                        end
                     end 
                     else if (is_digit) begin 
                         num <= digit_val;
@@ -307,13 +336,20 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end 
                     else if (is_reg && source_type == TYPE_NONE) begin
-                        `ifdef DEBUG_REG
-                        $display("[DEBUG REG] Read Reg: %c | Global Value: %d | Current ArgCount: %d | Stack Ptr: %d", 
-                            inst_byte, registers[inst_byte - `REG_START], arg_count, registers["s" - `REG_START]);
-                        `endif
-                        source <= inst_byte - `REG_START;
-                        source_type <= TYPE_REG;
-                        fsm_state <= STATE_FETCH;
+                        if ((inst_byte - `REG_START) < scope_arg_count) begin
+                            param_is_dest <= 0;
+                            param_fetch_addr <= inst_byte - `REG_START; 
+                            fsm_state <= STATE_FETCH_PARAM;
+                        end else begin
+                            `ifdef DEBUG_REG
+                            $display("[DEBUG REG] Read Reg: %c | Global Value: %d | Current ArgCount: %d | Stack Ptr: %d", 
+                                inst_byte, registers[inst_byte - `REG_START], arg_count, registers["s" - `REG_START]);
+                            `endif
+                            source <= inst_byte - `REG_START;
+                            source_type <= TYPE_REG;
+                            func_ptr <= inst_byte - `REG_START;
+                            fsm_state <= STATE_FETCH;
+                        end
                     end 
                     // POINTER SHADOW INTERCEPT
                     else if (inst_byte == "@" && !has_shadow) begin
@@ -340,6 +376,24 @@ module abc_cpu#(
                     end
                 end
             end 
+
+            // THE PARAMETER FETCH HALT STATE
+            else if (fsm_state == STATE_FETCH_PARAM) begin
+                `ifdef DEBUG_REG
+                $display("[DEBUG PARAM] Fetched Stack Param ID: %d | Value: %d", param_fetch_addr, stack_read_data);
+                `endif
+                if (param_is_dest) begin
+                    dest_param_val <= stack_read_data;
+                    dest <= param_fetch_addr; // Store the parameter index safely
+                    dest_type <= TYPE_PARAM;
+                    func_ptr <= stack_read_data[4:0]; // The value is the pointer!
+                end else begin
+                    num <= stack_read_data;
+                    source_type <= TYPE_NUM;
+                    func_ptr <= stack_read_data[4:0];
+                end
+                fsm_state <= STATE_FETCH;
+            end
 
             // 5. EXECUTION
             else if (fsm_state == STATE_EXEC) begin
@@ -370,12 +424,18 @@ module abc_cpu#(
                     end else if (op == "(") begin 
                         stack_write_en <= 1;
                         stack_write_addr <= registers["s" - `REG_START][7:0];
-                        if (op_count == 2) begin
-                            stack_write_data <= shadow_dest; 
+                        if (op_count == 4) begin
+                            stack_write_data <= {27'd0, shadow_dest}; 
                             func_ptr <= (shadow_op != 0) ? source : shadow_dest; 
                         end 
-                        else if (op_count == 1) begin
+                        else if (op_count == 3) begin
                             stack_write_data <= {24'd0, shadow_op}; 
+                        end
+                        else if (op_count == 2) begin
+                            stack_write_data <= {24'd0, scope_frame_pointer}; 
+                        end
+                        else if (op_count == 1) begin
+                            stack_write_data <= {27'd0, scope_arg_count}; 
                             arg_count <= 0; 
                         end
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
@@ -411,7 +471,12 @@ module abc_cpu#(
                             `endif
                             stack_write_en <= 1;
                             stack_write_addr <= registers["s" - `REG_START][7:0];
-                            stack_write_data <= {20'd0, pc}; // THE FIX: Restore original exact pc anchor!
+                            stack_write_data <= {20'd0, pc}; 
+                            
+                            // ANCHOR LEXICAL SCOPE
+                            scope_frame_pointer <= registers["s" - `REG_START][7:0] - arg_count;
+                            scope_arg_count <= arg_count;
+                            
                             registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                             pc <= registers[func_ptr][11:0]; 
                             
@@ -422,13 +487,19 @@ module abc_cpu#(
                         end
                         op_count <= op_count - 1;
                     end else if (op == ".") begin
-                        if (op_count == 4) begin 
-                            num <= (dest_type == TYPE_REG) ? registers[dest] : num;
+                        if (op_count == 6) begin 
+                            num <= (dest_type == TYPE_REG) ? registers[dest] : (dest_type == TYPE_PARAM) ? dest_param_val : num;
                             source_type <= TYPE_NUM; 
                             
                             pc <= stack_read_data[11:0]; 
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - arg_count - 32'd1; 
-                        end else if (op_count == 3) begin
+                        end else if (op_count == 5) begin
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                        end else if (op_count == 4) begin 
+                            scope_arg_count <= stack_read_data[4:0];
+                            registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
+                        end else if (op_count == 3) begin 
+                            scope_frame_pointer <= stack_read_data[7:0];
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
                         end else if (op_count == 2) begin 
                             shadow_op <= stack_read_data[7:0]; 
@@ -465,7 +536,14 @@ module abc_cpu#(
                             op_count <= op_count - 1;
                         end
                     end else begin
-                        registers[dest] <= alu_result;
+                        if (dest_type == TYPE_PARAM) begin
+                            stack_write_en <= 1;
+                            stack_write_addr <= scope_frame_pointer + dest;
+                            stack_write_data <= alu_result;
+                            dest_param_val <= alu_result; // Keep local copy fresh for chained math!
+                        end else begin
+                            registers[dest] <= alu_result;
+                        end
                     end
                     
                     if (op != "@" || !has_shadow) begin
@@ -487,7 +565,7 @@ module abc_cpu#(
                     end 
                     else if (pending_char == ".") begin
                         op <= ".";
-                        op_count <= 4;
+                        op_count <= 6;
                         fsm_state <= STATE_EXEC;
                     end
                     else if (pending_char == "+" || pending_char == "-" 
