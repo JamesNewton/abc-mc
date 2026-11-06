@@ -56,17 +56,19 @@ module abc_cpu#(
     );
 
     // --- STREAM PIPELINE REGISTERS ---
-    localparam TYPE_NONE  = 2'd0;
-    localparam TYPE_REG   = 2'd1;
-    localparam TYPE_NUM   = 2'd2;
-    localparam TYPE_PARAM = 2'd3; // NEW: Explicitly tracks stack-bound parameters!
+    localparam TYPE_NONE  = 3'd0;
+    localparam TYPE_REG   = 3'd1;
+    localparam TYPE_NUM   = 3'd2;
+    localparam TYPE_PARAM = 3'd3; 
+    localparam TYPE_ACC   = 3'd4; 
 
     reg [4:0] dest;
-    reg [1:0] dest_type;
+    reg [2:0] dest_type;
     reg [7:0] op;
     reg [4:0] source;
     reg [31:0] num;
-    reg [1:0] source_type;
+    reg [31:0] acc; 
+    reg [2:0] source_type;
     
     reg [7:0] op_count;
     reg [7:0] pending_char;
@@ -146,20 +148,21 @@ module abc_cpu#(
 
     // --- THE ALU ---
     // If destination is a parameter, pull its value from the fetched dest_param_val register!
-    wire [31:0] alu_operand_a = (dest_type == TYPE_PARAM) ? dest_param_val : registers[dest];
+    wire [31:0] alu_operand_a = (dest_type == TYPE_PARAM) ? dest_param_val : 
+                                (dest_type == TYPE_ACC) ? acc : registers[dest];
     wire [31:0] alu_operand_b = (source_type == TYPE_NUM) ? num : registers[source];
     reg  [31:0] alu_result;
 
     always @(*) begin
         case (op)
-            ":": alu_result = alu_operand_b;
-            "+": alu_result = alu_operand_a + alu_operand_b;
-            "-": alu_result = alu_operand_a - alu_operand_b;
-            "&": alu_result = alu_operand_a & alu_operand_b;
-            "|": alu_result = alu_operand_a | alu_operand_b;
-            "^": alu_result = alu_operand_a ^ alu_operand_b;
-            "*": alu_result = alu_operand_a * alu_operand_b;
-            "/": alu_result = alu_operand_a / alu_operand_b;
+            ":": alu_result =  alu_operand_b;
+            "+": alu_result =  alu_operand_a + alu_operand_b;
+            "-": alu_result =  alu_operand_a - alu_operand_b;
+            "&": alu_result =  alu_operand_a & alu_operand_b;
+            "|": alu_result =  alu_operand_a | alu_operand_b;
+            "^": alu_result =  alu_operand_a ^ alu_operand_b;
+            "*": alu_result =  alu_operand_a * alu_operand_b;
+            "/": alu_result =  alu_operand_a / alu_operand_b;
             "<": alu_result = (alu_operand_a < alu_operand_b) ? 32'd1 : 32'd0;
             ">": alu_result = (alu_operand_a > alu_operand_b) ? 32'd1 : 32'd0;
             "=": alu_result = (alu_operand_a == alu_operand_b) ? 32'd1 : 32'd0;
@@ -176,6 +179,7 @@ module abc_cpu#(
             source_type <= TYPE_NONE;
             op <= 0;
             num <= 0;
+            acc <= 0;
             op_count <= 0;
             
             shadow_dest <= 0;
@@ -197,7 +201,7 @@ module abc_cpu#(
             func_ptr <= 0;
             
             registers["r" - `REG_START] <= 32'd10; // Default radix
-            registers["s" - `REG_START] <= 32'd0; // Initialize stack pointer
+            registers["s" - `REG_START] <= 32'd0;  // Initialize stack pointer
         end else begin
             
             if (fsm_state == STATE_FETCH) begin
@@ -210,7 +214,7 @@ module abc_cpu#(
                     fsm_state <= STATE_FETCH_WAIT;
                     pc <= pc;
                 end
-                if (in_comment) begin
+                else if (in_comment) begin
                     if (is_eol) begin
                         in_comment <= 0;
                         pending_char <= inst_byte;
@@ -221,7 +225,10 @@ module abc_cpu#(
                     end
                 end 
                 else if (in_string) begin
-                    if (inst_byte == "\"") in_string <= 0; 
+                    if (inst_byte == "\"") begin 
+                        in_string <= 0;
+                        pending_char <= 0; 
+                    end
                     fsm_state <= STATE_FETCH;
                 end
                 else if (inst_byte == "\"") begin
@@ -230,6 +237,7 @@ module abc_cpu#(
                         num <= pc + 1; 
                         source_type <= TYPE_NUM;
                     end
+                    pending_char <= 0; 
                     fsm_state <= STATE_FETCH;
                 end
                 else if (inst_byte == "(") begin
@@ -237,17 +245,28 @@ module abc_cpu#(
                     shadow_dest <= dest; 
                     op <= "(";
                     op_count <= 4; 
+                    pending_char <= 0; 
                     fsm_state <= STATE_EXEC;
                 end
                 else if (inst_byte == ")") begin
                     op <= ")";
                     op_count <= 2; 
+                    pending_char <= 0; 
                     fsm_state <= STATE_EXEC;
                 end
                 // --- CONDITIONAL LOGIC ---
                 // Control chars MUST force pending instructions to execute first.
                 // We only process them if we are skipping, or if the pipeline is empty.
-                else if ((skip_depth > 0 || dest_type == TYPE_NONE) && inst_byte == "#") begin
+                // Implicit wipe to plug the operation routing black hole.
+                else if (op == 0 && (inst_byte == "\n" || inst_byte == ";" || inst_byte == 8'd0)) begin
+                    dest_type <= TYPE_NONE;
+                    source_type <= TYPE_NONE;
+                    num <= 0;
+                    acc <= 0;
+                    fsm_state <= STATE_FETCH;
+                end
+                // Safely route comments even if pipeline has an active accumulator
+                else if ((skip_depth > 0 || op == 0) && inst_byte == "#") begin
                     in_comment <= 1;
                     fsm_state <= STATE_FETCH;
                 end 
@@ -279,7 +298,7 @@ module abc_cpu#(
                         fsm_state <= STATE_FETCH;
                     end else begin
                         op <= inst_byte;
-                        op_count <= 6; // Takes 6 cycles to pop the full frame!
+                        op_count <= 6; // Takes 6 cycles to pop the full frame.
                         fsm_state <= STATE_EXEC; 
                     end
                 end
@@ -306,8 +325,8 @@ module abc_cpu#(
                         end
                     end 
                     else if (is_digit) begin 
-                        num <= digit_val;
-                        dest_type <= TYPE_NUM;
+                        acc <= digit_val;
+                        dest_type <= TYPE_ACC;
                         fsm_state <= STATE_FETCH;
                     end
                     else if (is_op) begin
@@ -326,8 +345,8 @@ module abc_cpu#(
                         op <= "@";
                         has_shadow <= 0; 
                     end
-                    else if (dest_type == TYPE_NUM && is_digit) begin
-                        num <= (num * radix) + digit_val;
+                    else if (dest_type == TYPE_ACC && is_digit) begin
+                        acc <= (acc * radix) + digit_val;
                     end
                     fsm_state <= STATE_FETCH;
                 end 
@@ -369,6 +388,10 @@ module abc_cpu#(
                     end
                     // STREAM TRIGGER
                     else begin
+                        `ifdef DEBUG_EXE
+                         $display("[DEBUG TRIGGER] Firing on char: %c (%d) | Stuck OP is: %c", 
+                                 (inst_byte < 32) ? 32 : inst_byte, inst_byte, (op == 0) ? 32 : op);
+                        `endif
                         pending_char <= inst_byte;
                         op_count <= 1;            
                         fsm_state <= STATE_EXEC;  
@@ -389,7 +412,7 @@ module abc_cpu#(
                     dest_param_val <= stack_read_data;
                     dest <= param_fetch_addr; // Store the parameter index safely
                     dest_type <= TYPE_PARAM;
-                    func_ptr <= stack_read_data[4:0]; // The value is the pointer!
+                    func_ptr <= stack_read_data[4:0]; // The value is the pointer.
                 end else begin
                     num <= stack_read_data;
                     source_type <= TYPE_NUM;
@@ -429,6 +452,9 @@ module abc_cpu#(
                         stack_write_addr <= registers["s" - `REG_START][7:0];
                         if (op_count == 4) begin
                             stack_write_data <= {27'd0, shadow_dest}; 
+                            `ifdef DEBUG_EXE
+                            $display("[DEBUG CALL] Saving shadow_dest: %d | shadow_op: %d", shadow_dest, shadow_op);
+                            `endif
                             func_ptr <= (shadow_op != 0) ? source : shadow_dest; 
                         end 
                         else if (op_count == 3) begin
@@ -440,6 +466,12 @@ module abc_cpu#(
                         else if (op_count == 1) begin
                             stack_write_data <= {27'd0, scope_arg_count}; 
                             arg_count <= 0; 
+                            
+                            dest_type <= TYPE_NONE;
+                            source_type <= TYPE_NONE;
+                            op <= 0;
+                            num <= 0;
+                            acc <= 0;
                         end
                         registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                         op_count <= op_count - 1;
@@ -460,7 +492,8 @@ module abc_cpu#(
                             end else if (dest_type != TYPE_NONE) begin 
                                 stack_write_en <= 1;
                                 stack_write_addr <= registers["s" - `REG_START][7:0];
-                                stack_write_data <= (dest_type == TYPE_NUM) ? num : registers[dest]; 
+                                stack_write_data <= (dest_type == TYPE_ACC) ? acc : 
+                                                    (dest_type == TYPE_PARAM) ? dest_param_val : registers[dest]; 
                                 registers["s" - `REG_START] <= registers["s" - `REG_START] + 32'd1;
                                 arg_count <= arg_count + 5'd1; 
                             end else begin
@@ -484,6 +517,7 @@ module abc_cpu#(
                             pc <= registers[func_ptr][11:0]; 
                             
                             num <= 0;
+                            acc <= 0;
                             source_type <= TYPE_NONE;
                             dest_type <= TYPE_NONE;
                             op <= 0;
@@ -491,7 +525,9 @@ module abc_cpu#(
                         op_count <= op_count - 1;
                     end else if (op == ".") begin
                         if (op_count == 6) begin 
-                            num <= (dest_type == TYPE_REG) ? registers[dest] : (dest_type == TYPE_PARAM) ? dest_param_val : num;
+                            num <= (dest_type == TYPE_REG) ? registers[dest] : 
+                                   (dest_type == TYPE_PARAM) ? dest_param_val : 
+                                   (dest_type == TYPE_ACC) ? acc : num;
                             source_type <= TYPE_NUM; 
                             
                             pc <= stack_read_data[11:0]; 
@@ -508,16 +544,26 @@ module abc_cpu#(
                             shadow_op <= stack_read_data[7:0]; 
                             registers["s" - `REG_START] <= registers["s" - `REG_START] - 32'd1;
                         end else if (op_count == 1) begin 
-                            dest <= stack_read_data[4:0];
-                            dest_type <= (shadow_op != 0) ? TYPE_REG : TYPE_NONE; 
-                            func_ptr <= stack_read_data[4:0]; 
-                            op <= shadow_op; 
+                            `ifdef DEBUG_EXE
+                            $display("[DEBUG RETURN] Finishing return. Caller's shadow_op was: %d", shadow_op);
+                            `endif
                             pending_char <= 0; 
                             
                             if (shadow_op == 0) begin
+                                acc <= num; 
+                                dest_type <= TYPE_ACC;
                                 source_type <= TYPE_NONE;
                                 num <= 0;
+                                op <= 0;
+                            end else begin
+                                dest <= stack_read_data[4:0];
+                                dest_type <= TYPE_REG; 
+                                op <= shadow_op; 
+                                `ifdef DEBUG_EXE
+                                $display("[DEBUG RESTORE] Restored dest to: %d | op to: %c", stack_read_data[4:0], shadow_op);
+                                `endif
                             end
+                            func_ptr <= stack_read_data[4:0]; 
                             
                             op_count <= 0;
                             fsm_state <= STATE_FETCH; 
@@ -543,9 +589,14 @@ module abc_cpu#(
                             stack_write_en <= 1;
                             stack_write_addr <= scope_frame_pointer + dest;
                             stack_write_data <= alu_result;
-                            dest_param_val <= alu_result; // Keep local copy fresh for chained math!
+                            dest_param_val <= alu_result; // Keep local copy fresh for chained math.
+                        end else if (dest_type == TYPE_ACC) begin
+                            acc <= alu_result; 
                         end else begin
                             registers[dest] <= alu_result;
+                            `ifdef DEBUG_EXE
+                            $display("[DEBUG WRITE] Wrote %d to Registers[%d]", alu_result, dest);
+                            `endif
                         end
                     end
                     
@@ -555,15 +606,19 @@ module abc_cpu#(
                 end else begin
                     stack_write_en <= 0; 
                     
+                    // Allow `#` to natively trigger a pipeline wipe during inline math evaluation
                     if (   pending_char == "\n" 
                         || pending_char == ";" 
                         || pending_char == 8'd0 
                         || pending_char == ")" 
+                        || pending_char == "#" 
                      ) begin 
                         dest_type <= TYPE_NONE;
                         op <= 0;
                         source_type <= TYPE_NONE;
                         num <= 0;
+                        acc <= 0;
+                        if (pending_char == "#") in_comment <= 1;
                         fsm_state <= STATE_FETCH;
                     end 
                     else if (pending_char == ".") begin
@@ -588,6 +643,7 @@ module abc_cpu#(
                         op <= 0;
                         source_type <= TYPE_NONE;
                         num <= 0;
+                        acc <= 0;
                         fsm_state <= STATE_FETCH;
                     end
                 end
@@ -602,7 +658,7 @@ module abc_cpu#(
             watchdog <= 0;
         end else begin
             watchdog <= watchdog + 1;
-            if (watchdog > 2000) begin 
+            if (watchdog > 3000) begin 
                 $display("[FATAL] Watchdog timeout reached. Killing simulation.");
                 $finish;
             end
